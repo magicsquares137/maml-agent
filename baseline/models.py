@@ -13,7 +13,7 @@ class AgentState(BaseModel):
     conversation_history: List[Message] = []
     iteration: int = 0
     done: bool = False
-    max_iters: int = 10  # Default, will be set by agent
+    max_iters: int = 50  # Default, will be set by agent
     
     @property 
     def should_continue(self):
