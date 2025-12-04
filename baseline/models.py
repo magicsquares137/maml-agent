@@ -1,13 +1,15 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Literal, Dict, Any
 from datetime import datetime
-from config import Config
-response = client.chat.completions.create(
-            model=config.base_model,
-            messages=[msg.dict() for msg in state.conversation_history],
-            temperature=config.temperature,
-            max_tokens=config.max_tokens
-        )
+from .config import Config
+
+
+# response = client.chat.completions.create(
+#             model=base_model,
+#             messages=[msg.dict() for msg in state.conversation_history],
+#             temperature=temperature,
+#             max_tokens=max_tokens
+#         )
 
 class Message(BaseModel):
     """Single conversation message"""
