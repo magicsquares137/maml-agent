@@ -14,9 +14,9 @@ class ReactAgent:
         self.base_model: str = config.base_model
         self.truncation_threshold: int = config.truncation_threshold
         self.template = Template()
-        self.state = AgentState()
+        self.state = AgentState(max_iters=config.max_iters)
         self.client = OpenAI(api_key=config.openai_api_key)
-        self.eval_tracker: Dict = {}  # Fixed: Dict() not Dict
+        self.eval_tracker: Dict = {}  
         
     def initialize(
         self, 
