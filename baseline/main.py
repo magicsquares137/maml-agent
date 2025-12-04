@@ -526,12 +526,7 @@ def main():
     args = parser.parse_args()
     
     # Select config based on model
-    if args.model == "qwen":
-        config = Config.for_qwen()
-    elif args.model == "mistral":
-        config = Config.for_mistral()
-    else:
-        config = Config.for_gpt4o()
+    config = Config()
     
     # Run evaluation
     run_evaluation(
