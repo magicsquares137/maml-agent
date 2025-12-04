@@ -12,12 +12,17 @@ class Config:
     
     # OpenAI parameters
     openai_api_key: str = os.getenv("OPENAI_API_KEY")
-    base_model: str = "gpt-4o-2024-05-13"  # GPT-4o baseline
+    service: str = "TogetherAI" # can set to OpenAI or TogetherAI
+    togetherai_api_key: str = os.getenv("TOGETHER_AI")
+    base_model: str = "mistralai/Mistral-Small-24B-Instruct-2501" 
     max_tokens: int = 2000
     temperature: float = 0.0
     
     # Context management
     truncation_threshold: int = 20000  # Characters, not tokens
+
+    # AppWorld Root
+    os.environ["APPWORLD_ROOT"] = os.getenv("APPWORLD_ROOT")
     
     @classmethod
     def for_model(cls, model_name: str):

@@ -3,6 +3,7 @@ from templates import Template
 from config import Config
 from models import AgentState, Message
 from openai import OpenAI
+import os
 from typing import Dict
 from utils import message_parser, truncate_message_history
 
@@ -15,7 +16,14 @@ class ReactAgent:
         self.truncation_threshold: int = config.truncation_threshold
         self.template = Template()
         self.state = AgentState(max_iters=config.max_iters)
-        self.client = OpenAI(api_key=config.openai_api_key)
+        if config.service == "OpenAI":
+            self.client = OpenAI(api_key=config.openai_api_key)
+        elif config.service == "TogetherAI":
+            os.environ["TOGETHER_API_KEY"] = config.togetherai_api_key
+            self.client = OpenAI(
+                api_key=config.togetherai_api_key,
+                base_url="https://api.together.xyz/v1"
+            )
         self.eval_tracker: Dict = {}  
         
     def initialize(
