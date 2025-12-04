@@ -8,7 +8,7 @@ load_dotenv()
 @dataclass 
 class Config:
     # Agent parameters
-    max_iters: int = 50  # Match the paper's baseline
+    max_iters: int = 10  # Match the paper's baseline
     
     # OpenAI parameters
     openai_api_key: str = os.getenv("OPENAI_API_KEY")
