@@ -12,7 +12,7 @@ class Config:
     
     # OpenAI parameters
     openai_api_key: str = os.getenv("OPENAI_API_KEY")
-    service: str = "TogetherAI" # can set to OpenAI or TogetherAI
+    service: str = "vLLM" # can set to OpenAI or TogetherAI
     togetherai_api_key: str = os.getenv("TOGETHER_AI")
     base_model: str = "mistralai/Mistral-Small-24B-Instruct-2501" 
     max_tokens: int = 2000

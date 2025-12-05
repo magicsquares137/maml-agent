@@ -24,6 +24,13 @@ class ReactAgent:
                 api_key=config.togetherai_api_key,
                 base_url="https://api.together.xyz/v1"
             )
+        elif config.service == "vLLM":
+            openai_api_key = "EMPTY"
+            openai_api_base = "http://localhost:8000/v1"
+            self.client = OpenAI(
+                api_key=openai_api_key,
+                base_url=openai_api_base,
+            )
         self.eval_tracker: Dict = {}  
         
     def initialize(
