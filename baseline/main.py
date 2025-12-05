@@ -123,6 +123,17 @@ def run_evaluation(
     
     # Load task IDs
     task_ids = load_task_ids(dataset_name)
+
+    # check which tasks already have outputs
+    completed_tasks = set()
+    tasks_dir = output_dir / "tasks"
+    if tasks_dir.exists():
+        completed_tasks = {d.name for d in tasks_dir.iterdir() if d.is_dir()}
+        print(f"✅ Found {len(completed_tasks)} already completed tasks")
+        # Filter out completed tasks
+        task_ids = [tid for tid in task_ids if tid not in completed_tasks]
+        print(f"📝 Remaining tasks to run: {len(task_ids)}")
+
     if max_tasks:
         task_ids = task_ids[:max_tasks]
     
