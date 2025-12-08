@@ -14,7 +14,7 @@ class Config:
     openai_api_key: str = os.getenv("OPENAI_API_KEY")
     service: str = "vLLM" # can set to OpenAI or TogetherAI
     togetherai_api_key: str = os.getenv("TOGETHER_AI")
-    base_model: str = "mistralai/Mistral-Small-24B-Instruct-2501" 
+    base_model: str = os.getenv("VLLM_MODEL") 
     max_tokens: int = 2000
     temperature: float = 0.0
     
