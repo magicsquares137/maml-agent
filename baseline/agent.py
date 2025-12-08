@@ -6,9 +6,10 @@ from openai import OpenAI
 import os
 from typing import Dict
 from utils import message_parser, truncate_message_history
+from vllm import LLM, SamplingParams
 
 class ReactAgent:
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, return_log_probs: bool = False) -> None:
         self.max_iters: int = config.max_iters  # Fixed: use instance
         self.max_tokens: int = config.max_tokens
         self.temperature: float = config.temperature
@@ -32,6 +33,7 @@ class ReactAgent:
                 base_url=openai_api_base,
             )
         self.eval_tracker: Dict = {}  
+
         
     def initialize(
         self, 
@@ -52,22 +54,44 @@ class ReactAgent:
             Message(role="user", content=init_template)
         )
     
-    def call_llm(self):  # Fixed: added colon
-        # Truncate if needed
+    def call_llm(self, return_log_probs: bool = False): 
         messages = truncate_message_history(
             self.state.conversation_history, 
             self.truncation_threshold
         )
-        
+
+        extra_args = {}
+        if return_log_probs:
+            extra_args["logprobs"] = True
+            extra_args["top_logprobs"] = 1  # only need the generated token
+
         response = self.client.chat.completions.create(
             model=self.base_model,
             messages=[msg.dict() for msg in messages],
             temperature=self.temperature,
-            max_tokens=self.max_tokens
+            max_tokens=self.max_tokens,
+            **extra_args,
         )
-        return response.choices[0].message.content
+
+        choice = response.choices[0]
+        text = choice.message.content
+
+        if not return_log_probs:
+            return text, None
+
+        token_logprobs = []
+        tokens = []
+        if choice.logprobs is not None:
+            for item in choice.logprobs.content:
+                tokens.append(item.token)
+                token_logprobs.append(item.logprob)
+
+        return text, {
+            "tokens": tokens,
+            "logprobs": token_logprobs,
+        }
     
-    def step(self, world):  # Fixed: added colon
+    def step(self, world):  
         """
         Takes conversation, gets LLM response, parses code, executes, updates state
         """
