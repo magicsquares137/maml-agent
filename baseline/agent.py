@@ -6,10 +6,9 @@ from openai import OpenAI
 import os
 from typing import Dict
 from utils import message_parser, truncate_message_history
-from vllm import LLM, SamplingParams
 
 class ReactAgent:
-    def __init__(self, config: Config, return_log_probs: bool = False) -> None:
+    def __init__(self, config: Config, return_log_probs: bool = False, seed: int = None) -> None:
         self.max_iters: int = config.max_iters  # Fixed: use instance
         self.max_tokens: int = config.max_tokens
         self.temperature: float = config.temperature
@@ -17,6 +16,7 @@ class ReactAgent:
         self.truncation_threshold: int = config.truncation_threshold
         self.template = Template()
         self.state = AgentState(max_iters=config.max_iters)
+        self.seed = seed
         if config.service == "OpenAI":
             self.client = OpenAI(api_key=config.openai_api_key)
         elif config.service == "TogetherAI":
@@ -54,13 +54,15 @@ class ReactAgent:
             Message(role="user", content=init_template)
         )
     
-    def call_llm(self, return_log_probs: bool = False): 
+    def call_llm(self, return_log_probs: bool = False) -> Tuple[str, Union[None, List[Tuple]]]: 
         messages = truncate_message_history(
             self.state.conversation_history, 
             self.truncation_threshold
         )
 
         extra_args = {}
+        if self.seed:
+            extra_args["seed"] = self.seed
         if return_log_probs:
             extra_args["logprobs"] = True
             extra_args["top_logprobs"] = 1  # only need the generated token
@@ -80,26 +82,21 @@ class ReactAgent:
             return text, None
 
         token_logprobs = []
-        tokens = []
         if choice.logprobs is not None:
             for item in choice.logprobs.content:
-                tokens.append(item.token)
-                token_logprobs.append(item.logprob)
+                token_logprobs.append((item.token, item.logprob))
 
-        return text, {
-            "tokens": tokens,
-            "logprobs": token_logprobs,
-        }
+        return text, token_logprobs
     
     def step(self, world):  
         """
         Takes conversation, gets LLM response, parses code, executes, updates state
         """
-        llm_output = self.call_llm()
+        llm_output, token_logprobs = self.call_llm(return_log_probs=True)
         
         # Append LLM response to history
         self.state.conversation_history.append(
-            Message(role="assistant", content=llm_output)
+            Message(role="assistant", content=llm_output, log_probs=token_logprobs)
         )
         
         # Extract and execute code

@@ -7,13 +7,15 @@ class Message(BaseModel):
     """Single conversation message"""
     role: Literal["system", "user", "assistant"]
     content: str
+    log_probs: Optional[List[Tuple[str, float]]] = None
 
 
 class AgentState(BaseModel):
-    conversation_history: List[Message] = []
+    conversation_history: List[Message] = Field(default_factory=list)
+    log_probs: List[float] = Field(default_factory=list)
     iteration: int = 0
     done: bool = False
-    max_iters: int = 50  # Default, will be set by agent
+    max_iters: int = 50
     
     @property 
     def should_continue(self):

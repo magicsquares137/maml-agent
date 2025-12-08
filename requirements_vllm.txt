@@ -1,0 +1,3 @@
+vllm
+hf-transfer
+openai
