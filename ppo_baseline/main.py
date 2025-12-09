@@ -1,4 +1,5 @@
 import random
+import uuid
 
 class PPO_LOOP:
 	def __init__(self, K: int = 6, random_sample_number: int = 40, difficulties: List[int] = [1,2], sets: List[str] = ["train", "dev"], config: Config = None):
@@ -20,7 +21,7 @@ class PPO_LOOP:
 
 		self.config = config
 
-	def collect_rollouts(self):
+	def collect_rollouts(self) -> List[dict]:
 		# Collect task ids
 		task_set = random.sample(self.train_ids, self.random_sample_number)
 		all_rollouts = []
@@ -33,7 +34,8 @@ class PPO_LOOP:
 			for rollout in range(self.K):
 				print(f"\n{'='*60}")
 				print(f"Task {task_id} rollout: {rollout}")
-				print(f"{'='*60}")				
+				print(f"{'='*60}")
+				random_uuid = uuid.uuid4()				
 				task_result = {
 					"task_id": task_id,
 					"completed": False,
@@ -43,7 +45,8 @@ class PPO_LOOP:
 					"conversation_length": 0,
 					"token_log_probs": None,
 					"unit_tests": None,
-					"overall_success": None
+					"overall_success": None,
+					"uuid": random_uuid
 				}
 
 				try:
@@ -108,13 +111,36 @@ class PPO_LOOP:
 
 		        all_rollouts.append(task_result)
 
-		    return all_rollouts
+		    return all_rollouts, task_set
 
-	def get_advantages(self, all_rollouts: List[dict]):
-		pass 
+	def get_advantages(self, all_rollouts: List[dict], task_set: List):
+		# Using equation A(c, x_k) = R(c, x_k) - (\frac{1}{K-1})\sum_{i=1}^K R(c, x_i)
+		updated_rollouts = []
+		for task in task_set:
+			# Get all K rollouts for this task
+			task_rollouts = [x for x in all_rollouts if x["task_id"] == task]
 
-	def calculate_advantage(self):
-		pass 
+			for rollout in task_rollouts:
+				# for each rollout, get advantage
+				rollout_reward = rollout["unit_tests"]
+				rollout_id = rollout["uuid"]
+
+				# Get leave one out baseline reward
+				baseline_reward = average([x["unit_tests"] for x in task_rollouts if x["uuid"] != rollout_id])*(1/(len(task_rollouts)-1))
+
+				LOO_advantage = rollout_reward - baseline_reward
+				rollout["advantage"] = LOO_advantage
+				updated_rollouts.append(rollout)
+
+		if len(updated_rollouts) == len(all_rollouts):
+			return updated_rollouts
+		else:
+			raise Exception("Missing rollouts during advantage calculation")
+
+	def get_loss(self):
+		pass
+
+
 
 
 def main():
