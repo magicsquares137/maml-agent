@@ -21,7 +21,7 @@ class PPO_LOOP:
 
 		self.config = config
 
-	def collect_rollouts(self) -> List[dict]:
+	def collect_rollouts(self, agent: ReactAgent) -> List[dict]:
 		# Collect task ids
 		task_set = random.sample(self.train_ids, self.random_sample_number)
 		all_rollouts = []
@@ -46,7 +46,8 @@ class PPO_LOOP:
 					"token_log_probs": None,
 					"unit_tests": None,
 					"overall_success": None,
-					"uuid": random_uuid
+					"uuid": random_uuid,
+					"agent_state": None
 				}
 
 				try:
@@ -56,7 +57,6 @@ class PPO_LOOP:
 						experiment_name=experiment_name,
 					) as world:	
 						print(f"📋 Instruction: {world.task.instruction}\n")
-						agent = ReactAgent(self.config)
 		                agent.initialize(
 		                    first_name=world.task.supervisor.get("first_name", ""),
 		                    last_name=world.task.supervisor.get("last_name", ""),
@@ -109,6 +109,9 @@ class PPO_LOOP:
 		            task_result["error"] = str(e)
 		            print(f"\n Error: {e}")
 
+		        # Attach the agents state to cache log probs/tokens
+		        task_result["agent_state"] = agent.state
+
 		        all_rollouts.append(task_result)
 
 		    return all_rollouts, task_set
@@ -137,12 +140,45 @@ class PPO_LOOP:
 		else:
 			raise Exception("Missing rollouts during advantage calculation")
 
-	def get_loss(self):
-		pass
+	def shuffled_batchify(self, data, batch_size):
+	    indices = list(range(len(data)))
+	    random.shuffle(indices)
+	    
+	    for i in range(0, len(indices), batch_size):
+	        batch_idx = indices[i:i + batch_size]
+	        yield [data[j] for j in batch_idx]
 
 
 
 
 def main():
-	agent = ReactAgent(config)
+	for iteration in range(iterations): # define in config
+		# Make fresh agent
+		agent = ReactAgent(config) # where are loras entering?
+
+		try:
+			# Get rollouts
+			rollouts, task_set = collect_rollouts(agent)
+
+			# Get advantages (base policy)
+			updated_rollouts = get_advantages(rollouts, task_set)
+		except Exception as e:
+			raise Exception(f"Exception: {e}")
+
+		# loop through tokens in outputs, calculcate loss, mini batch
+		batches = 
+		for epoch in epochs:
+			for minibatch in shuffled_batchify(updated_rollouts, batch_size=8):
+				# calculate loss
+				loss = 0
+				for episode in minibatch:
+					for token in episode["agent_state"].conversation_history: # cycle through message list, only pull out agent messages
+						
+
+
+
+
+
+
+
 
