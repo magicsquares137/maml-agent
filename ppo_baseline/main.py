@@ -1,178 +1,172 @@
-import random
-import uuid
+# import random
+# import uuid
 
-class PPO_LOOP:
-	def __init__(self, K: int = 6, random_sample_number: int = 40, difficulties: List[int] = [1,2], sets: List[str] = ["train", "dev"], config: Config = None):
-		# number of rollouts per task
-		self.K = K
+# class PPO_LOOP:
+# 	def __init__(self, K: int = 6, random_sample_number: int = 40, difficulties: List[int] = [1,2], sets: List[str] = ["train", "dev"], config: Config = None):
+# 		# number of rollouts per task
+# 		self.K = K
 
-		# Number of random tasks to pull per iteration
-		self.random_sample_number = random_sample_number
+# 		# Number of random tasks to pull per iteration
+# 		self.random_sample_number = random_sample_number
 
-		# Difficulty levels to include during training 
-		self.difficulties = difficulties
+# 		# Difficulty levels to include during training 
+# 		self.difficulties = difficulties
 
-		# Whether we train on train, dev, etc
-		self.train_ids = [
-		    tid
-		    for dataset_name in sets
-		    for tid in load_task_ids(dataset_name)
-		]
+# 		# Whether we train on train, dev, etc
+# 		self.train_ids = [
+# 		    tid
+# 		    for dataset_name in sets
+# 		    for tid in load_task_ids(dataset_name)
+# 		]
 
-		self.config = config
+# 		self.config = config
 
-	def collect_rollouts(self, agent: ReactAgent) -> List[dict]:
-		# Collect task ids
-		task_set = random.sample(self.train_ids, self.random_sample_number)
-		all_rollouts = []
+# 	def collect_rollouts(self, agent: ReactAgent) -> List[dict]:
+# 		# Collect task ids
+# 		task_set = random.sample(self.train_ids, self.random_sample_number)
+# 		all_rollouts = []
 
-		for index, task_id in enumerate(tqdm(task_set, desc=f" Running base policy rollouts for {len(task_set)} tasks")):
-			print(f"\n{'='*60}")
-			print(f"Task {index + 1}/{len(task_set)}: {task_id}")
-			print(f"{'='*60}")
+# 		for index, task_id in enumerate(tqdm(task_set, desc=f" Running base policy rollouts for {len(task_set)} tasks")):
+# 			print(f"\n{'='*60}")
+# 			print(f"Task {index + 1}/{len(task_set)}: {task_id}")
+# 			print(f"{'='*60}")
 
-			for rollout in range(self.K):
-				print(f"\n{'='*60}")
-				print(f"Task {task_id} rollout: {rollout}")
-				print(f"{'='*60}")
-				random_uuid = uuid.uuid4()				
-				task_result = {
-					"task_id": task_id,
-					"completed": False,
-					"iterations": 0,
-					"error": None,
-					"result": None,
-					"conversation_length": 0,
-					"token_log_probs": None,
-					"unit_tests": None,
-					"overall_success": None,
-					"uuid": random_uuid,
-					"agent_state": None
-				}
+# 			for rollout in range(self.K):
+# 				print(f"\n{'='*60}")
+# 				print(f"Task {task_id} rollout: {rollout}")
+# 				print(f"{'='*60}")
+# 				random_uuid = uuid.uuid4()				
+# 				task_result = {
+# 					"task_id": task_id,
+# 					"completed": False,
+# 					"iterations": 0,
+# 					"error": None,
+# 					"conversation_length": 0,
+# 					"token_log_probs": None,
+# 					"overall_success": None,
+# 					"uuid": random_uuid,
+# 					"agent_state": None,
+# 					"evaluation_details": None
+# 				}
 
-				try:
-					# Load the appworld environment for the task
-					with AppWorld(
-						task_id=task_id,
-						experiment_name=experiment_name,
-					) as world:	
-						print(f"📋 Instruction: {world.task.instruction}\n")
-		                agent.initialize(
-		                    first_name=world.task.supervisor.get("first_name", ""),
-		                    last_name=world.task.supervisor.get("last_name", ""),
-		                    email=world.task.supervisor.get("email", ""),
-		                    phone_number=world.task.supervisor.get("phone_number", ""),
-		                    task_instructions=world.task.instruction
-		                )	
+# 				try:
+# 					# Load the appworld environment for the task
+# 					with AppWorld(
+# 						task_id=task_id,
+# 						experiment_name=experiment_name,
+# 					) as world:	
+# 						print(f"📋 Instruction: {world.task.instruction}\n")
+# 		                agent.initialize(
+# 		                    first_name=world.task.supervisor.get("first_name", ""),
+# 		                    last_name=world.task.supervisor.get("last_name", ""),
+# 		                    email=world.task.supervisor.get("email", ""),
+# 		                    phone_number=world.task.supervisor.get("phone_number", ""),
+# 		                    task_instructions=world.task.instruction
+# 		                )	
 
-		                # Complete the task
-		                agent.run(world)
+# 		                # Complete the task
+# 		                agent.run(world)
 
-		                # Collect results
-		                task_result["completed"] = world.task_completed()
-		                task_result["iterations"] = agent.state.iteration
-		                task_result["conversation_length"] = len(agent.state.conversation_history)
+# 		                # Collect results
+# 		                task_result["completed"] = world.task_completed()
+# 		                task_result["iterations"] = agent.state.iteration
+# 		                task_result["conversation_length"] = len(agent.state.conversation_history)
 
-		                # Only store token log probs generated by policy
-						task_result["token_log_probs"] = [
-						    msg.log_probs
-						    for msg in agent.state.conversation_history
-						    if msg.role == "assistant"
-						]
+# 		                # Only store token log probs generated by policy
+# 						task_result["token_log_probs"] = [
+# 						    msg.log_probs
+# 						    for msg in agent.state.conversation_history
+# 						    if msg.role == "assistant"
+# 						]
 
-						task_result["assistant_messages"] = [
-						    msg.content
-						    for msg in agent.state.conversation_history
-						    if msg.role == "assistant"
-						]
-
-					    if world.task_completed():
+# 						task_result["assistant_messages"] = [
+# 						    msg.content
+# 						    for msg in agent.state.conversation_history
+# 						    if msg.role == "assistant"
+# 						]
 					        
-					        # Get performance metrics
-					        evaluation = world.evaluate()
-					        
-					        # evaluation is a dict with:
-					        # - 'overall': float (0-1, overall task success)
-					        # - 'unit_tests': dict mapping unit test names to scores (0-1)
-					        
-					        self.state.overall_score = evaluation['overall']
-					        self.state.unit_test_scores = evaluation['unit_tests']
-					
-		                if hasattr(world, 'get_result'):
-		                    task_result["result"] = world.get_result()
-		                elif hasattr(world.task, 'result'):
-		                    task_result["result"] = world.task.result
-		                
-		                print(f"\n✅ Task completed: {task_result['completed']}")
-		                print(f"🔄 Iterations: {task_result['iterations']}")
-		        except Exception as e:
-		            task_result["error"] = str(e)
-		            print(f"\n Error: {e}")
+# 				        # Get performance metrics
+# 				        evaluation = world.evaluate().to_dict()
+				        
+# 				        # evaluation is a dict with:
+# 				        # - 'overall': float (0-1, overall task success)
+# 				        # - 'unit_tests': dict mapping unit test names to scores (0-1)
+				        
+# 				        task_result["overall_success"] = len(evaluation['passes'])/evaluation['num_tests']
+# 				        task_result["evaluation_details"] = evaluation
+	                
+# 	                print(f"\nTask finished: {task_result['completed']}")
+# 	                print(f"🔄 Iterations: {task_result['iterations']}")
+# 		        except Exception as e:
+# 		            task_result["error"] = str(e)
+# 		            print(f"\n Error: {e}")
 
-		        # Attach the agents state to cache log probs/tokens
-		        task_result["agent_state"] = agent.state
+# 		        # Attach the agents state to cache log probs/tokens
+# 		        task_result["agent_state"] = agent.state
 
-		        all_rollouts.append(task_result)
+# 		        all_rollouts.append(task_result)
 
-		    return all_rollouts, task_set
+# 		    return all_rollouts, task_set
 
-	def get_advantages(self, all_rollouts: List[dict], task_set: List):
-		# Using equation A(c, x_k) = R(c, x_k) - (\frac{1}{K-1})\sum_{i=1}^K R(c, x_i)
-		updated_rollouts = []
-		for task in task_set:
-			# Get all K rollouts for this task
-			task_rollouts = [x for x in all_rollouts if x["task_id"] == task]
+# 	def get_advantages(self, all_rollouts: List[dict], task_set: List):
+# 		# Using equation A(c, x_k) = R(c, x_k) - (\frac{1}{K-1})\sum_{i=1}^K R(c, x_i)
+# 		updated_rollouts = []
+# 		for task in task_set:
+# 			# Get all K rollouts for this task
+# 			task_rollouts = [x for x in all_rollouts if x["task_id"] == task]
 
-			for rollout in task_rollouts:
-				# for each rollout, get advantage
-				rollout_reward = rollout["unit_tests"]
-				rollout_id = rollout["uuid"]
+# 			for rollout in task_rollouts:
+# 				# for each rollout, get advantage
+# 				rollout_reward = rollout["overall_success"]
+# 				rollout_id = rollout["uuid"]
 
-				# Get leave one out baseline reward
-				baseline_reward = average([x["unit_tests"] for x in task_rollouts if x["uuid"] != rollout_id])*(1/(len(task_rollouts)-1))
+# 				# Get leave one out baseline reward
+# 				baseline_reward = average([x["overall_success"] for x in task_rollouts if x["uuid"] != rollout_id])
+# 				LOO_advantage = rollout_reward - baseline_reward
 
-				LOO_advantage = rollout_reward - baseline_reward
-				rollout["advantage"] = LOO_advantage
-				updated_rollouts.append(rollout)
+# 				rollout["advantage"] = LOO_advantage
+# 				updated_rollouts.append(rollout)
 
-		if len(updated_rollouts) == len(all_rollouts):
-			return updated_rollouts
-		else:
-			raise Exception("Missing rollouts during advantage calculation")
+# 		if len(updated_rollouts) == len(all_rollouts):
+# 			return updated_rollouts
+# 		else:
+# 			raise Exception("Missing rollouts during advantage calculation")
 
-	def shuffled_batchify(self, data, batch_size):
-	    indices = list(range(len(data)))
-	    random.shuffle(indices)
+# 	def shuffled_batchify(self, data, batch_size):
+# 	    indices = list(range(len(data)))
+# 	    random.shuffle(indices)
 	    
-	    for i in range(0, len(indices), batch_size):
-	        batch_idx = indices[i:i + batch_size]
-	        yield [data[j] for j in batch_idx]
+# 	    for i in range(0, len(indices), batch_size):
+# 	        batch_idx = indices[i:i + batch_size]
+# 	        yield [data[j] for j in batch_idx]
 
 
 
 
-def main():
-	for iteration in range(iterations): # define in config
-		# Make fresh agent
-		agent = ReactAgent(config) # where are loras entering?
+# def main():
+# 	for iteration in range(iterations): # define in config
+# 		# Make fresh agent
+# 		agent = ReactAgent(config) # where are loras entering?
 
-		try:
-			# Get rollouts
-			rollouts, task_set = collect_rollouts(agent)
+# 		try:
+# 			# Get rollouts
+# 			rollouts, task_set = collect_rollouts(agent)
 
-			# Get advantages (base policy)
-			updated_rollouts = get_advantages(rollouts, task_set)
-		except Exception as e:
-			raise Exception(f"Exception: {e}")
+# 			# Get advantages (base policy)
+# 			updated_rollouts = get_advantages(rollouts, task_set)
+# 		except Exception as e:
+# 			raise Exception(f"Exception: {e}")
 
-		# loop through tokens in outputs, calculcate loss, mini batch
-		batches = 
-		for epoch in epochs:
-			for minibatch in shuffled_batchify(updated_rollouts, batch_size=8):
-				# calculate loss
-				loss = 0
-				for episode in minibatch:
-					for token in episode["agent_state"].conversation_history: # cycle through message list, only pull out agent messages
+# 		# loop through tokens in outputs, calculcate loss, mini batch
+# 		batches = 
+# 		for epoch in epochs:
+# 			for minibatch in shuffled_batchify(updated_rollouts, batch_size=8):
+# 				# calculate loss
+# 				loss = 0
+# 				for episode in minibatch:
+# 					for token in episode["agent_state"].conversation_history: # cycle through message list, only pull out agent messages
+
+
 						
 
 
@@ -181,4 +175,481 @@ def main():
 
 
 
+import torch
+from peft import LoraConfig, get_peft_model, PeftModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import random
+import uuid
 
+class PPO_LOOP:
+    def __init__(
+        self, 
+        K: int = 6, 
+        random_sample_number: int = 40, 
+        difficulties: List[int] = [1,2], 
+        sets: List[str] = ["train", "dev"], 
+        config: Config = None,
+        epsilon: float = 0.2,  # PPO clip parameter
+        learning_rate: float = 1e-5,
+        n_epochs: int = 3,
+        batch_size: int = 8
+    ):
+        self.K = K
+        self.random_sample_number = random_sample_number
+        self.difficulties = difficulties
+        self.train_ids = [
+            tid
+            for dataset_name in sets
+            for tid in load_task_ids(dataset_name)
+        ] # filter by difficulties
+        self.config = config
+        self.epsilon = epsilon
+        self.learning_rate = learning_rate
+        self.n_epochs = n_epochs
+        self.batch_size = batch_size
+        
+        # Initialize base model and tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(config.base_model)
+        self.base_model = AutoModelForCausalLM.from_pretrained(
+            config.base_model,
+            torch_dtype=torch.float16,
+            device_map="auto"
+        )
+        
+        # base model (reference policy)
+        for param in self.base_model.parameters():
+            param.requires_grad = False
+        
+        # create lora adapter for trainable policy
+        lora_config = LoraConfig(
+            r=16,  # LoRA rank
+            lora_alpha=32,
+            target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM"
+        )
+        
+        self.policy_model = get_peft_model(self.base_model, lora_config)
+        
+        # Optimizer for LoRA parameters only
+        self.optimizer = torch.optim.AdamW(
+            self.policy_model.parameters(), 
+            lr=self.learning_rate
+        )
+    
+    def collect_rollouts(
+        self, 
+        agent: ReactAgent
+    ) -> List[dict]:
+
+        # Collect task ids
+        task_set = random.sample(self.train_ids, self.random_sample_number)
+        all_rollouts = []
+
+        for index, task_id in enumerate(
+            tqdm(
+                task_set, 
+                desc=f" Running base policy rollouts for {len(task_set)} tasks"
+                )
+            ):
+            print(f"\n{'='*60}")
+            print(f"Task {index + 1}/{len(task_set)}: {task_id}")
+            print(f"{'='*60}")
+
+            for rollout in range(self.K):
+                print(f"\n{'='*60}")
+                print(f"Task {task_id} rollout: {rollout}")
+                print(f"{'='*60}")
+                random_uuid = uuid.uuid4()              
+                task_result = {
+                    "task_id": task_id,
+                    "completed": False,
+                    "iterations": 0,
+                    "error": None,
+                    "conversation_length": 0,
+                    "token_log_probs": None,
+                    "overall_success": None,
+                    "uuid": random_uuid,
+                    "agent_state": None,
+                    "evaluation_details": None
+                }
+
+                try:
+                    # Load the appworld environment for the task
+                    with AppWorld(
+                        task_id=task_id,
+                        experiment_name=experiment_name,
+                    ) as world: 
+                        print(f"📋 Instruction: {world.task.instruction}\n")
+                        agent.initialize(
+                            first_name=world.task.supervisor.get("first_name", ""),
+                            last_name=world.task.supervisor.get("last_name", ""),
+                            email=world.task.supervisor.get("email", ""),
+                            phone_number=world.task.supervisor.get("phone_number", ""),
+                            task_instructions=world.task.instruction
+                        )   
+
+                        # Complete the task
+                        agent.run(world)
+
+                        # Collect results
+                        task_result["completed"] = world.task_completed()
+                        task_result["iterations"] = agent.state.iteration
+                        task_result["conversation_length"] = len(agent.state.conversation_history)
+
+                        # Only store token log probs generated by policy
+                        task_result["token_log_probs"] = [
+                            msg.log_probs
+                            for msg in agent.state.conversation_history
+                            if msg.role == "assistant"
+                        ]
+
+                        task_result["assistant_messages"] = [
+                            msg.content
+                            for msg in agent.state.conversation_history
+                            if msg.role == "assistant"
+                        ]
+                            
+                        # Get performance metrics
+                        evaluation = world.evaluate().to_dict()
+                        
+                        task_result["overall_success"] = len(evaluation['passes'])/evaluation['num_tests']
+                        task_result["evaluation_details"] = evaluation
+                    
+                    print(f"\nTask finished: {task_result['completed']}")
+                    print(f"🔄 Iterations: {task_result['iterations']}")
+                except Exception as e:
+                    task_result["error"] = str(e)
+                    print(f"\n Error: {e}")
+
+                # Attach the agents state to cache log probs/tokens
+                task_result["agent_state"] = agent.state
+
+                all_rollouts.append(task_result)
+
+            return all_rollouts, task_set
+    
+    def get_advantages(
+        self, 
+        all_rollouts: List[dict], 
+        task_set: List
+    ) -> List[dict]:
+      # Using equation A(c, x_k) = R(c, x_k) - (\frac{1}{K-1})\sum_{i=1}^K R(c, x_i)
+      updated_rollouts = []
+      for task in task_set:
+          # Get all K rollouts for this task
+          task_rollouts = [x for x in all_rollouts if x["task_id"] == task]
+
+          for rollout in task_rollouts:
+              # for each rollout, get advantage
+              rollout_reward = rollout["overall_success"]
+              rollout_id = rollout["uuid"]
+
+              # Get leave one out baseline reward
+              baseline_reward = average([x["overall_success"] for x in task_rollouts if x["uuid"] != rollout_id])
+              LOO_advantage = rollout_reward - baseline_reward
+
+              rollout["advantage"] = LOO_advantage
+              updated_rollouts.append(rollout)
+
+      if len(updated_rollouts) == len(all_rollouts):
+          return updated_rollouts
+      else:
+          raise Exception("Missing rollouts during advantage calculation")
+    
+    # def compute_log_probs(self, model, messages, token_log_probs_list):
+    #     """
+    #     Compute NEW log probabilities for assistant tokens using the updated model.
+    #     OLD log probs are already stored in token_log_probs_list from rollout.
+        
+    #     Args:
+    #         model: The updated policy model (with new LoRA weights)
+    #         messages: Full conversation history (Message objects with role, content, log_probs)
+    #         token_log_probs_list: List of List[(token_str, old_logprob)] from rollout collection
+        
+    #     Returns:
+    #         List of token data dicts with new_logprob, old_logprob for computing ratio
+    #     """
+    #     all_token_data = []
+    #     assistant_idx = 0
+        
+    #     for i, msg in enumerate(messages):
+    #         if msg.role == "assistant":
+    #             # Get all messages BEFORE this assistant turn as context
+    #             context = messages[:i]
+                
+    #             # Format context as text (user messages + previous assistant messages): List[str]
+    #             context_text = [x.content for x in context]
+                
+    #             # full assistant output, str
+    #             assistant_text = msg.content
+                
+    #             # Tokenize context, we dont have context tokens from vllm output
+    #             context_ids = self.tokenizer.encode(context_text, return_tensors="pt").to(model.device)
+
+    #             # Get the exact tokens that were generated during rollout
+    #             old_token_log_probs = token_log_probs_list[assistant_idx]
+    #             token_strs = [tok for tok, _ in old_token_log_probs]
+
+    #             # Convert these exact token strings to IDs
+    #             assistant_token_ids = [
+    #                 self.tokenizer.convert_tokens_to_ids(tok) 
+    #                 for tok in token_strs
+    #             ]
+
+    #             # Concatenate context + assistant tokens
+    #             # This is the full sequence the model will process
+    #             full_ids = torch.cat([
+    #                 context_ids,
+    #                 torch.tensor([assistant_token_ids], device=model.device)
+    #             ], dim=1)
+            
+    #             # New policy's predictions:
+    #             with torch.no_grad():
+    #                 outputs = model(full_ids) # obj: transformers.modeling_outputs.CausalLMOutputWithPast
+    #                 # output.logits -> [batch_size, seq_len, vocab_size], [1, T, V]
+
+    #                 # tensor([[
+    #                 #     [ 10.3,  -2.1,  4.8, ...,  0.1],   # logits for token1 predicting token2
+    #                 #     [  9.2,  -3.4,  2.0, ..., -1.7],   # logits for token2 predicting token3
+    #                 #     [ 11.0,  -4.2,  1.1, ...,  0.3],   # logits for token3 predicting token4
+    #                 #     ...
+    #                 # ]])
+
+    #                 logits = outputs.logits[0] # [T, V]
+                
+    #             context_length = context_ids.shape[1]
+                
+    #             # Compute NEW log probs for each token
+    #             for j, (token_str, old_logprob) in enumerate(old_token_log_probs):
+    #                 # Find this token's ID
+    #                 token_id = assistant_ids[j] if j < len(assistant_ids) else None
+                    
+    #                 if token_id is None:
+    #                     print(f"Warning: Token mismatch at position {j}")
+    #                     continue
+                    
+    #                 # Position in the full sequence where this token was predicted
+    #                 # The model predicts token at position t+1 given positions 0:t
+    #                 position = context_length + j
+                    
+    #                 if position < logits.shape[0]:
+    #                     # Get NEW log probability from updated policy
+    #                     token_logprob = torch.log_softmax(logits[position], dim=-1)[token_id].item()
+                        
+    #                     all_token_data.append({
+    #                         'new_logprob': token_logprob,  # From updated policy
+    #                         'old_logprob': old_logprob,     # From rollout collection
+    #                         'token_id': token_id,
+    #                         'token_str': token_str
+    #                     })
+                
+    #             assistant_idx += 1
+        
+    #     return all_token_data
+
+    def compute_log_probs(self, model, messages, token_log_probs_list):
+        """
+        Compute NEW log probabilities for assistant tokens using the updated model.
+        OLD log probs are already stored in token_log_probs_list from rollout.
+
+        Args:
+            model: The updated policy model (with new LoRA weights)
+            messages: Full conversation history (Message objects with role, content)
+            token_log_probs_list: List[List[(token_str, old_logprob)]]
+                one list per assistant message, in order.
+
+        Returns:
+            all_token_data: list of dicts with:
+                {
+                  'new_logprob': float,
+                  'old_logprob': float,
+                  'token_id': int,
+                  'token_str': str,
+                }
+        """
+        all_token_data = []
+        assistant_idx = 0
+
+        for i, msg in enumerate(messages):
+            if msg.role != "assistant":
+                continue
+
+            # 1) Build context string up to (but not including) this assistant turn
+            context_msgs = messages[:i]
+            context_str = "".join(m.content for m in context_msgs)  # match vLLM formatting
+
+            # 2) Assistant text for this turn
+            assistant_text = msg.content
+
+            # 3) Tokenize full sequence: context + assistant
+            full_str = context_str + assistant_text
+            full_ids = self.tokenizer(
+                full_str,
+                return_tensors="pt",
+                add_special_tokens=False,
+            ).input_ids.to(model.device)       # [1, T]
+            full_ids = full_ids  # alias
+
+            # Lengths
+            old_token_log_probs = token_log_probs_list[assistant_idx]
+            A = len(old_token_log_probs)               # number of assistant tokens
+            T = full_ids.shape[1]
+            context_length = T - A                     # number of context tokens
+
+            if context_length <= 0:
+                print("Warning: context_length <= 0, tokenization mismatch?")
+                continue
+
+            # Assistant token ids are last A tokens
+            assistant_token_ids = full_ids[0, -A:]     # [A]
+
+            # 4) Forward pass to get logits
+            with torch.no_grad():
+                outputs = model(full_ids)              # logits: [1, T, V]
+                logits = outputs.logits[0]             # [T, V]
+                log_probs = torch.log_softmax(logits, dim=-1)  # [T, V]
+
+            # 5) For each assistant token, get NEW logprob from correct position
+            for j, (token_str, old_logprob) in enumerate(old_token_log_probs):
+                token_id = assistant_token_ids[j].item()
+
+                # token at index context_length + j is predicted by logits[context_length - 1 + j]
+                pos = context_length - 1 + j
+                if pos < 0 or pos >= log_probs.shape[0]:
+                    print(f"Warning: position {pos} out of range (T={log_probs.shape[0]})")
+                    continue
+
+                new_logprob = log_probs[pos, token_id].item()
+
+                all_token_data.append({
+                    "new_logprob": new_logprob,
+                    "old_logprob": old_logprob,
+                    "token_id": token_id,
+                    "token_str": token_str,
+                    "assistant_turn": assistant_idx,
+                    "token_index": j,
+                })
+
+            assistant_idx += 1
+
+        return all_token_data
+
+
+    def compute_ppo_loss(self, minibatch):
+        """
+        Compute PPO loss for a minibatch of episodes.
+        Uses per-token importance weights (Equation 5 from paper).
+        """
+        total_loss = 0
+        num_tokens = 0
+        
+        for episode in minibatch:
+            advantage = episode["advantage"]
+            
+            # Get token data with new and old log probs
+            token_data = self.compute_log_probs(
+                self.policy_model,
+                episode["agent_state"].conversation_history,
+                episode["assistant_messages"],
+                episode["token_log_probs"]
+            )
+            
+            for token_info in token_data:
+                new_logprob = token_info['new_logprob']
+                old_logprob = token_info['old_logprob']
+                
+                # Compute importance ratio
+                ratio = torch.exp(torch.tensor(new_logprob - old_logprob))
+                
+                # PPO clipping objective
+                # g_epsilon(A) = A + epsilon * |A|
+                g_epsilon_advantage = advantage + self.epsilon * abs(advantage)
+                
+                # min(ratio * A, g_epsilon(A))
+                surrogate1 = ratio * advantage
+                surrogate2 = g_epsilon_advantage
+                
+                token_loss = -torch.min(
+                    torch.tensor(surrogate1),
+                    torch.tensor(surrogate2)
+                )
+                
+                total_loss += token_loss
+                num_tokens += 1
+        
+        # Average over all tokens in minibatch
+        return total_loss / num_tokens if num_tokens > 0 else torch.tensor(0.0)
+    
+    def shuffled_batchify(self, data, batch_size):
+        indices = list(range(len(data)))
+        random.shuffle(indices)
+        
+        for i in range(0, len(indices), batch_size):
+            batch_idx = indices[i:i + batch_size]
+            yield [data[j] for j in batch_idx]
+    
+    def train_iteration(self):
+        """Run one full training iteration"""
+        # 1. Collect rollouts with current policy
+        agent = ReactAgent(self.config)
+        # TODO: Need to make agent use self.policy_model for generation
+        rollouts, task_set = self.collect_rollouts(agent)
+        
+        # 2. Compute advantages
+        updated_rollouts = self.get_advantages(rollouts, task_set)
+        
+        # 3. Update policy with PPO
+        for epoch in range(self.n_epochs):
+            epoch_loss = 0
+            num_batches = 0
+            
+            for minibatch in self.shuffled_batchify(updated_rollouts, self.batch_size):
+                self.optimizer.zero_grad()
+                
+                loss = self.compute_ppo_loss(minibatch)
+                loss.backward()
+                
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(self.policy_model.parameters(), 1.0)
+                
+                self.optimizer.step()
+                
+                epoch_loss += loss.item()
+                num_batches += 1
+            
+            print(f"Epoch {epoch+1}/{self.n_epochs}, Avg Loss: {epoch_loss/num_batches:.4f}")
+        
+        return updated_rollouts
+
+def main():
+    config = Config(...)  # Your config
+    
+    ppo_loop = PPO_LOOP(
+        K=6,
+        random_sample_number=40,
+        config=config,
+        epsilon=0.2,
+        learning_rate=1e-5,
+        n_epochs=3,
+        batch_size=8
+    )
+    
+    num_iterations = 10
+    for iteration in range(num_iterations):
+        print(f"\n{'='*60}")
+        print(f"Iteration {iteration+1}/{num_iterations}")
+        print(f"{'='*60}")
+        
+        rollouts = ppo_loop.train_iteration()
+        
+        # Save checkpoint
+        ppo_loop.policy_model.save_pretrained(f"checkpoints/iter_{iteration}")
+        
+        # Log metrics
+        avg_reward = sum(r["overall_success"] for r in rollouts) / len(rollouts)
+        print(f"Average Reward: {avg_reward:.4f}")
+
+if __name__ == "__main__":
+    main()

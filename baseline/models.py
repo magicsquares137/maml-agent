@@ -1,6 +1,6 @@
 # models.py
-from pydantic import BaseModel
-from typing import List, Literal
+from pydantic import BaseModel, Field
+from typing import List, Literal, Optional, Tuple
 
 
 class Message(BaseModel):
