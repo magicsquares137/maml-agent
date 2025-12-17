@@ -205,7 +205,7 @@ class ReactAgent:
                 content=init_template, 
             )
 
-        if self.tokenizer:
+        if self.tokenizer: # can probably remove this, bc we tokenize everything prior to going into llm
             # Tokenize the input as vllm would
             prompt_token_ids = render_chat_to_token_ids(message)
             message.tokenized_input = prompt_token_ids
@@ -299,7 +299,9 @@ class ReactAgent:
                     elif backtick_count == 2 and found_opening:
                         # Found closing backticks - stop here
                         break
-            
+            # open question: above we are truncating content, should we also for tokenized input?
+
+            # content corresponds to generated outputs, not inputs
             self.state.conversation_history.append( # we shoudl be storing tokenized inputs here as well
                 # tokenized inputs would be a list of all historic turns, concatenated, and tokenized -> outputs/log probs
                 Message(role="assistant", content=llm_output[:code_end].strip(), log_probs=truncated_logprobs, tokenized_input=prompt_token_ids)
@@ -307,7 +309,7 @@ class ReactAgent:
         else:
             # No code found - store full response
             self.state.conversation_history.append(
-                Message(role="assistant", content=llm_output, log_probs=token_logprobs)
+                Message(role="assistant", content=llm_output, log_probs=token_logprobs, tokenized_input=prompt_token_ids)
             )
         
         # Append real observation
