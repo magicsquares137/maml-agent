@@ -2,4 +2,10 @@
 
 export APPWORLD_ROOT="/workspace/maml/maml-agent"
 export HF_TOKEN=
-vllm serve mistralai/Mistral-Small-24B-Instruct-2501 --port 8000
+vllm serve microsoft/Phi-3-mini-4k-instruct --port 8000
+
+microsoft/Phi-3-mini-128k-instruct
+
+vllm serve microsoft/Phi-3-mini-128k-instruct \
+  --port 8000 \
+  --max-model-len 32768 # gpu capacity dependent

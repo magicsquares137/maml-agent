@@ -23,6 +23,21 @@ def message_parser(message: str) -> Optional[str]:
     
     return None
 
+
+def render_chat_to_token_ids(messages: List[dict], tokenizer):
+    # messages is your list of Message objects with .role / .content
+    chat = [{"role": m.role, "content": m.content} for m in messages]
+
+    # Apply the model's chat template so tokens match what vLLM expects
+    prompt_text = tokenizer.apply_chat_template(
+        chat,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    token_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
+    return token_ids
+
+
 def truncate_message_history(
     conversation_history: List[Message], 
     threshold: int

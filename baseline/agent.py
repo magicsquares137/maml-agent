@@ -141,12 +141,27 @@
 #         return world
 
 from typing import Union
+from templates import Template
+from config import Config
+from models import AgentState, Message
+from openai import OpenAI
+import os
+from typing import Dict, Optional
+from utils import message_parser, truncate_message_history, render_chat_to_token_ids
+
+
 class ReactAgent:
     def __init__(self, config: Config, return_log_probs: bool = False, seed: int = None) -> None:
-        self.max_iters: int = config.max_iters  # Fixed: use instance
+        self.max_iters: int = config.max_iters  
         self.max_tokens: int = 512
         self.temperature: float = config.temperature
         self.base_model: str = config.base_model
+        self.base_model_tokenizer: Optional[str]: config.base_model_tokenizer
+        
+        # If tokenizer is set, we can pass tokenized inputs into VLLM
+        if self.base_model_tokenizer:
+            self.tokenizer = AutoTokenizer.from_pretrained(config.base_model)
+
         self.truncation_threshold: int = config.truncation_threshold
         self.template = Template()
         self.state = AgentState(max_iters=config.max_iters)
@@ -184,15 +199,32 @@ class ReactAgent:
             phone_number, 
             task_instructions
         )
+
+        message = Message(
+                role="user", 
+                content=init_template, 
+            )
+
+        if self.tokenizer:
+            # Tokenize the input as vllm would
+            prompt_token_ids = render_chat_to_token_ids(message)
+            message.tokenized_input = prompt_token_ids
+
         self.state.conversation_history.append(
-            Message(role="user", content=init_template)
+            message
         )
     
-    def call_llm(self, return_log_probs: bool = True) -> Tuple[str, Union[None, List[Tuple]]]: 
+    def call_llm(self, return_log_probs: bool = True) -> Tuple[str, Union[None, List[Tuple]], List[int]]: 
         messages = truncate_message_history(
             self.state.conversation_history, 
             self.truncation_threshold
         )
+
+        prompt_token_ids = None
+
+        # We can pass either strings or tokens into vllm
+        if self.tokenizer:
+            prompt_token_ids = render_chat_to_token_ids(messages)
 
         extra_args = {}
         if self.seed:
@@ -201,16 +233,29 @@ class ReactAgent:
             extra_args["logprobs"] = True
             extra_args["top_logprobs"] = 1  # only need the generated token
 
-        response = self.client.chat.completions.create(
-            model=self.base_model,
-            messages=[msg.dict() for msg in messages],
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            **extra_args,
-        )
+        if not self.tokenizer:
+            response = self.client.chat.completions.create(
+                model=self.base_model,
+                messages=[m.dict(exclude={"log_probs", "tokenized_input"}) for m in messages],
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                **extra_args,
+            )
 
-        choice = response.choices[0]
-        text = choice.message.content
+            choice = response.choices[0]
+            text = choice.message.content
+        else:
+            completion = self.client.completions.create(
+                model=self.base_model,
+                prompt=None,                 
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                **extra_args,
+                extra_body={
+                    "prompt_token_ids": prompt_token_ids, # pass in tokenized input
+                },
+            )
+            text = completion.choices[0].text            
 
         if not return_log_probs:
             return text, None
@@ -220,10 +265,10 @@ class ReactAgent:
             for item in choice.logprobs.content:
                 token_logprobs.append((item.token, item.logprob)) # Note, unlike pytorch inference, logprobs from vllm are not shifted. 
 
-        return text, token_logprobs
+        return text, token_logprobs, prompt_token_ids # output text, output tokens/log probs, input tokens
     
     def step(self, world):  
-        llm_output, token_logprobs = self.call_llm(return_log_probs=True)
+        llm_output, token_logprobs, prompt_token_ids = self.call_llm(return_log_probs=True)
         
         # Log full output for analysis
         self.eval_tracker[f"iter_{self.state.iteration}_full_output"] = llm_output
@@ -255,8 +300,9 @@ class ReactAgent:
                         # Found closing backticks - stop here
                         break
             
-            self.state.conversation_history.append(
-                Message(role="assistant", content=llm_output[:code_end].strip(), log_probs=truncated_logprobs)
+            self.state.conversation_history.append( # we shoudl be storing tokenized inputs here as well
+                # tokenized inputs would be a list of all historic turns, concatenated, and tokenized -> outputs/log probs
+                Message(role="assistant", content=llm_output[:code_end].strip(), log_probs=truncated_logprobs, tokenized_input=prompt_token_ids)
             )
         else:
             # No code found - store full response
