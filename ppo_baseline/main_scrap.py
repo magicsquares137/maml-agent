@@ -3,10 +3,13 @@ from peft import LoraConfig, get_peft_model, PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import random
 import uuid
+from appworld import AppWorld, load_task_ids
+
 
 class PPO_LOOP:
     def __init__(
         self, 
+        # Defaults are from paper https://arxiv.org/pdf/2502.01600
         K: int = 6, 
         random_sample_number: int = 40, 
         difficulties: List[int] = [1,2], 
@@ -27,34 +30,35 @@ class PPO_LOOP:
         self.difficulties = difficulties
 
         # ["id_123", "id_345"]
-        self.train_ids = [
+        temp_train_ids = [
             tid
             for dataset_name in sets
             for tid in load_task_ids(dataset_name)
-        ] # TODO: filter by difficulties
+        ] 
 
-        # Config()
+        # filter by requested difficulty
+        self.train_ids = [] # <- ["123", "456", ...]
+        i = 1
+        for x in temp_train_ids:
+            print(f"Init difficulty check task {i} of {len(train_ids)}")
+            temp_world = AppWorld(task_id=x)
+            if world.task.ground_truth.metadata["difficulty"] in difficulties:
+                self.train_ids.append(x)
+            temp_world.close()
+            i += 1
+
+        # note: on iteration 1, we will use model with no lora and then update lora 
+        # then on all subsequent iterations, we will applied loras on top of base
         self.config = config
         self.epsilon = epsilon
         self.learning_rate = learning_rate
         self.n_epochs = n_epochs
         self.batch_size = batch_size
+        self.iteration = 0  # Track current iteration
         
-        # Initialize base model and tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(config.base_model)
-        self.base_model = AutoModelForCausalLM.from_pretrained(
-            config.base_model,
-            torch_dtype=torch.float16,
-            device_map="auto"
-        )
-        
-        # base model (reference policy)
-        for param in self.base_model.parameters():
-            param.requires_grad = False
-        
-        # create lora adapter for trainable policy
-        lora_config = LoraConfig(
-            r=16,  # LoRA rank
+        # Initialize LoRA config (but don't apply it yet)
+        self.lora_config = LoraConfig(
+            r=16,
             lora_alpha=32,
             target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
             lora_dropout=0.05,
@@ -62,19 +66,15 @@ class PPO_LOOP:
             task_type="CAUSAL_LM"
         )
         
-        self.policy_model = get_peft_model(self.base_model, lora_config)
+        # Start with None - first rollouts use base model
+        self.current_lora_path = None
         
-        # Optimizer for LoRA parameters only
-        self.optimizer = torch.optim.AdamW(
-            self.policy_model.parameters(), 
-            lr=self.learning_rate
-        )
+        # Will initialize after first rollout collection
+        self.policy_model = None
+        self.optimizer = None
     
     def collect_rollouts(
-        self, 
-        agent: ReactAgent # change react agent to take in frozen model/base lora, and current lora
-        # while looping through, collect log probs for both. maybe we move this method to the react agent
-        # tell it how many rollouts to generate? would be good to keep policy separate though. 
+        self
     ) -> List[dict]:
 
         # Collect task ids
@@ -95,14 +95,21 @@ class PPO_LOOP:
                 print(f"\n{'='*60}")
                 print(f"Task {task_id} rollout: {rollout}")
                 print(f"{'='*60}")
-                random_uuid = uuid.uuid4()              
+
+                # Create fresh agent for each rollout
+                agent = ReactAgent(
+                    self.config, 
+                    lora_adapter_path=self.current_lora_path,
+                )
+                random_uuid = uuid.uuid4()   
+
+                # Note: each dict below will end up being around .45KB            
                 task_result = {
                     "task_id": task_id,
                     "completed": False,
                     "iterations": 0,
                     "error": None,
                     "conversation_length": 0,
-                    "token_log_probs": None,
                     "overall_success": None,
                     "uuid": random_uuid,
                     "agent_state": None,
@@ -113,7 +120,7 @@ class PPO_LOOP:
                     # Load the appworld environment for the task
                     with AppWorld(
                         task_id=task_id,
-                        experiment_name=experiment_name,
+                        experiment_name="ppo_training",
                     ) as world: 
                         print(f"📋 Instruction: {world.task.instruction}\n")
                         agent.initialize(
@@ -131,19 +138,6 @@ class PPO_LOOP:
                         task_result["completed"] = world.task_completed()
                         task_result["iterations"] = agent.state.iteration
                         task_result["conversation_length"] = len(agent.state.conversation_history)
-
-                        # Only store token log probs generated by policy
-                        task_result["token_log_probs"] = [
-                            msg.log_probs
-                            for msg in agent.state.conversation_history
-                            if msg.role == "assistant"
-                        ]
-
-                        task_result["assistant_messages"] = [
-                            msg.content
-                            for msg in agent.state.conversation_history
-                            if msg.role == "assistant"
-                        ]
                             
                         # Get performance metrics
                         evaluation = world.evaluate().to_dict()
@@ -162,151 +156,140 @@ class PPO_LOOP:
 
                 all_rollouts.append(task_result)
 
-            return all_rollouts, task_set
-    
+        return all_rollouts, task_set
+
     def get_advantages(
         self, 
         all_rollouts: List[dict], 
         task_set: List
     ) -> List[dict]:
-      # Using equation A(c, x_k) = R(c, x_k) - (\frac{1}{K-1})\sum_{i=1}^K R(c, x_i)
-      updated_rollouts = []
-      for task in task_set:
-          # Get all K rollouts for this task
-          task_rollouts = [x for x in all_rollouts if x["task_id"] == task]
-
-          for rollout in task_rollouts:
-              # for each rollout, get advantage
-              rollout_reward = rollout["overall_success"]
-              rollout_id = rollout["uuid"]
-
-              # Get leave one out baseline reward
-              baseline_reward = average([x["overall_success"] for x in task_rollouts if x["uuid"] != rollout_id])
-              LOO_advantage = rollout_reward - baseline_reward
-
-              rollout["advantage"] = LOO_advantage
-              updated_rollouts.append(rollout)
-
-      if len(updated_rollouts) == len(all_rollouts):
-          return updated_rollouts
-      else:
-          raise Exception("Missing rollouts during advantage calculation")
-
-    def compute_log_probs(self, model, messages, token_log_probs_list):
         """
-        Compute NEW log probabilities for assistant tokens using the updated model.
-        OLD log probs are already stored in token_log_probs_list from rollout.
+        Compute leave-one-out advantages using Equation 3 from the paper:
+        A(c, x_k) = (K/(K-1)) * (R(c, x_k) - (1/K) * sum_i R(c, x_i))
+        
+        This is mathematically equivalent to:
+        A(c, x_k) = R(c, x_k) - (1/(K-1)) * sum_{i!=k} R(c, x_i)
+        """
+        updated_rollouts = []
+        
+        for task in task_set:
+            # Get all K rollouts for this task
+            task_rollouts = [x for x in all_rollouts if x["task_id"] == task]
 
+            if len(task_rollouts) != self.K:
+                raise Exception(
+                    f"Expected {self.K} rollouts for task {task}, but found {actual_rollouts}. "
+                    f"Check if collect_rollouts() completed successfully."
+                )
+            
+            # Compute average reward across ALL K rollouts
+            avg_reward = sum(x["overall_success"] for x in task_rollouts) / self.K
+            
+            for rollout in task_rollouts:
+                rollout_reward = rollout["overall_success"]
+                
+                # Equation 3: A(c, x_k) = (K/(K-1)) * (R(c, x_k) - avg_reward)
+                advantage = (self.K / (self.K - 1)) * (rollout_reward - avg_reward)
+                
+                rollout["advantage"] = advantage
+                updated_rollouts.append(rollout)
+        
+        if len(updated_rollouts) != len(all_rollouts):
+            raise Exception(f"Missing rollouts during advantage calculation: "
+                           f"expected {len(all_rollouts)}, got {len(updated_rollouts)}")
+        
+        return updated_rollouts
+
+    def compute_log_probs(self, episode: dict) -> dict:
+        """
+        Compute NEW log probabilities for tokens generated during rollout.
+        
+        Uses exact token IDs from vLLM (stored during rollout) to avoid
+        retokenization drift. Computes P_new(tokens) where tokens were
+        generated by the old policy.
+        
         Args:
-            model: The updated policy model (with new LoRA weights)
-            messages: Full conversation history (Message objects with role, content)
-            token_log_probs_list: List[List[(token_str, old_logprob)]]
-                one list per assistant message, in order.
-
-        Example input:
-            token_data = self.compute_log_probs(
-                self.policy_model,
-                episode["agent_state"].conversation_history,
-                episode["assistant_messages"],
-                episode["token_log_probs"]
-            )
-
+            episode: Task result dict with agent_state containing:
+                - conversation_history: List[Message] with assistant messages
+                - Each assistant message has:
+                    - tokenized_input: input token IDs from vLLM
+                    - log_probs: [(token_str, old_logprob, token_id), ...]
+        
         Returns:
-            all_token_data: list of dicts with:
+            episode dict with added "token_level_data" field containing:
+            [
                 {
-                  'new_logprob': float,
-                  'old_logprob': float,
-                  'token_id': int,
-                  'token_str': str,
-                }
+                    'new_logprob': float,  # P_new(token | context)
+                    'old_logprob': float,  # P_old(token | context) from rollout
+                    'token_id': int,
+                    'token_str': str,
+                    'assistant_turn': int,  # Which assistant message
+                    'position': int,  # Position within that message
+                },
+                ...
+            ]
         """
         all_token_data = []
+        agent_state = episode["agent_state"]
         assistant_idx = 0
-
-        for i, msg in enumerate(messages):
+        
+        for i, msg in enumerate(agent_state.conversation_history):
             if msg.role != "assistant":
                 continue
-
-            # 1) Build context string up to (but not including) this assistant turn
-            context_msgs = messages[:i]
-            context_str = "".join(m.content for m in context_msgs)  # match vLLM formatting
-
-            # 2) Assistant text for this turn
-            assistant_text = msg.content
-
-            # 3) Tokenize full sequence: context + assistant
-            full_str = context_str + assistant_text
-            full_ids = self.tokenizer(
-                full_str,
-                return_tensors="pt",
-                add_special_tokens=False,
-            ).input_ids.to(model.device)       # [1, T]
-            full_ids = full_ids  # alias
-
-            # Lengths
-            old_token_log_probs = token_log_probs_list[assistant_idx]
-            A = len(old_token_log_probs)               # number of assistant tokens
-            T = full_ids.shape[1]
-            context_length = T - A                     # number of context tokens
-
-            if context_length <= 0:
-                print("Warning: context_length <= 0, tokenization mismatch?")
+            
+            # Skip if no log probs (shouldn't happen but defensive)
+            if msg.log_probs is None or msg.tokenized_input is None:
                 continue
-
-            # Assistant token ids are last A tokens
-            assistant_token_ids = full_ids[0, -A:]     # [A]
-
-            # problem is that we are having to get all past messages, and newest message, 
-            # and pass through model. but we have to retokenize the total input
-            # because we only have return tokens from final assistant response
-
-            # but tokenization may be off, if we retokenize the full input for new model
-            # and use output log probs based on tokenization from vllm
-
-            # so if we then try to align logprobs from outputs based on inputs
-            # but tokenization is off, we may be comparing wrong things. 
-
-            # what we really need, is vllm to return tokens for every input/output pair
-            # then we can directly pass in tokens into model without retokenization
-            # and they will be garunteed to align. to accomplish this, we should shift react 
-            # agent to return tokens for every input/output. so we should shift
-            # react agent to take in a model and lora (current frozen policy)
-            # and return full token sequence for full input/outputs, and return 
-            # log probs for outputs. then we can just take the tokenize input (same as was fed into base policy)
-            # and put same tokens into temp policy, and directly compare
-            # to do this, we should shift react agent to not use vllm (unless vllm supports this)
-            # apparently can pass tokenized inputs into vllm, this could work
-
-            # 4) Forward pass to get logits
+            
+            # Get exact token IDs from rollout (no retokenization!)
+            prompt_token_ids = msg.tokenized_input  # Input tokens
+            output_token_data = msg.log_probs  # [(token_str, old_logprob, token_id), ...]
+            output_token_ids = [token_id for _, _, token_id in output_token_data]
+            
+            # Concatenate: full sequence = prompt + output
+            full_token_ids = prompt_token_ids + output_token_ids
+            full_ids = torch.tensor([full_token_ids], device=self.policy_model.device)  # [1, seq_len]
+            
+            # Forward pass through NEW policy
             with torch.no_grad():
-                outputs = model(full_ids)              # logits: [1, T, V]
-                logits = outputs.logits[0]             # [T, V]
-                log_probs = torch.log_softmax(logits, dim=-1)  # [T, V]
-
-            # 5) For each assistant token, get NEW logprob from correct position
-            for j, (token_str, old_logprob) in enumerate(old_token_log_probs):
-                token_id = assistant_token_ids[j].item()
-
-                # token at index context_length + j is predicted by logits[context_length - 1 + j]
-                pos = context_length - 1 + j
-                if pos < 0 or pos >= log_probs.shape[0]:
-                    print(f"Warning: position {pos} out of range (T={log_probs.shape[0]})")
+                outputs = self.policy_model(full_ids)
+                logits = outputs.logits[0]  # [seq_len, vocab_size]
+            
+            # Compute log probabilities
+            log_probs = torch.log_softmax(logits, dim=-1)  # [seq_len, vocab_size]
+            
+            # For each output token, get its NEW log prob
+            prompt_length = len(prompt_token_ids)
+            
+            for j, (token_str, old_logprob, token_id) in enumerate(output_token_data):
+                # KEY: Autoregressive shift
+                # Token at position prompt_length + j is predicted by logits at position prompt_length + j - 1
+                # Because: logits[t] predicts token[t+1]
+                position = prompt_length + j - 1
+                
+                # Sanity check
+                if position < 0 or position >= log_probs.shape[0]:
+                    print(f"Warning: position {position} out of range for sequence length {log_probs.shape[0]}")
                     continue
-
-                new_logprob = log_probs[pos, token_id].item()
-
+                
+                # Get NEW policy's log probability for this exact token
+                new_logprob = log_probs[position, token_id].item()
+                
                 all_token_data.append({
-                    "new_logprob": new_logprob,
-                    "old_logprob": old_logprob,
-                    "token_id": token_id,
-                    "token_str": token_str,
-                    "assistant_turn": assistant_idx,
-                    "token_index": j,
+                    'new_logprob': new_logprob,
+                    'old_logprob': old_logprob,
+                    'token_id': token_id,
+                    'token_str': token_str,
+                    'assistant_turn': assistant_idx,
+                    'position': j,
                 })
-
+            
             assistant_idx += 1
-
-        return all_token_data
+        
+        # Add token data to episode
+        episode["token_level_data"] = all_token_data
+        
+        return episode
 
 
     def compute_ppo_loss(self, minibatch):
@@ -314,45 +297,38 @@ class PPO_LOOP:
         Compute PPO loss for a minibatch of episodes.
         Uses per-token importance weights (Equation 5 from paper).
         """
-        total_loss = 0
+        total_loss = 0.0
         num_tokens = 0
         
         for episode in minibatch:
-            advantage = episode["advantage"]
+            # Compute new log probs and get token data
+            episode = self.compute_log_probs(episode)  
+            token_data = episode["token_level_data"] 
             
-            # Get token data with new and old log probs
-            token_data = self.compute_log_probs(
-                self.policy_model,
-                episode["agent_state"].conversation_history,
-                episode["assistant_messages"],
-                episode["token_log_probs"]
-            )
+            advantage = episode["advantage"]
             
             for token_info in token_data:
                 new_logprob = token_info['new_logprob']
                 old_logprob = token_info['old_logprob']
                 
-                # Compute importance ratio
-                ratio = torch.exp(torch.tensor(new_logprob - old_logprob))
+                # Importance ratio: π_new(token) / π_old(token)
+                log_ratio = new_logprob - old_logprob
+                ratio = torch.exp(torch.tensor(log_ratio, dtype=torch.float32))
                 
-                # PPO clipping objective
-                # g_epsilon(A) = A + epsilon * |A|
-                g_epsilon_advantage = advantage + self.epsilon * abs(advantage)
+                # Standard PPO clipping: min(ratio * A, clip(ratio, 1-ε, 1+ε) * A)
+                clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
                 
-                # min(ratio * A, g_epsilon(A))
                 surrogate1 = ratio * advantage
-                surrogate2 = g_epsilon_advantage
+                surrogate2 = clipped_ratio * advantage
                 
-                token_loss = -torch.min(
-                    torch.tensor(surrogate1),
-                    torch.tensor(surrogate2)
-                )
+                # Take minimum and negate (we want to maximize, optimizer minimizes)
+                token_loss = -torch.min(surrogate1, surrogate2)
                 
                 total_loss += token_loss
                 num_tokens += 1
         
         # Average over all tokens in minibatch
-        return total_loss / num_tokens if num_tokens > 0 else torch.tensor(0.0)
+        return total_loss / num_tokens if num_tokens > 0 else torch.tensor(0.0, dtype=torch.float32)
     
     def shuffled_batchify(self, data, batch_size):
         indices = list(range(len(data)))
@@ -364,10 +340,7 @@ class PPO_LOOP:
     
     def train_iteration(self):
         """Run one full training iteration"""
-        # 1. Collect rollouts with current policy
-        agent = ReactAgent(self.config)
-        # TODO: Need to make agent use self.policy_model for generation
-        rollouts, task_set = self.collect_rollouts(agent)
+        rollouts, task_set = self.collect_rollouts()
         
         # 2. Compute advantages
         updated_rollouts = self.get_advantages(rollouts, task_set)
@@ -396,7 +369,7 @@ class PPO_LOOP:
         return updated_rollouts
 
 def main():
-    config = Config(...)  # Your config
+    config = Config()  # Your config
     
     ppo_loop = PPO_LOOP(
         K=6,

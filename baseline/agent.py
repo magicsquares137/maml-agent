@@ -1,167 +1,53 @@
-# # agent.py
-# from templates import Template
-# from config import Config
-# from models import AgentState, Message
-# from openai import OpenAI
-# import os
-# from typing import Dict
-# from utils import message_parser, truncate_message_history
-
-# class ReactAgent:
-#     def __init__(self, config: Config, return_log_probs: bool = False, seed: int = None) -> None:
-#         self.max_iters: int = config.max_iters  # Fixed: use instance
-#         self.max_tokens: int = config.max_tokens
-#         self.temperature: float = config.temperature
-#         self.base_model: str = config.base_model
-#         self.truncation_threshold: int = config.truncation_threshold
-#         self.template = Template()
-#         self.state = AgentState(max_iters=config.max_iters)
-#         self.seed = seed
-#         if config.service == "OpenAI":
-#             self.client = OpenAI(api_key=config.openai_api_key)
-#         elif config.service == "TogetherAI":
-#             os.environ["TOGETHER_API_KEY"] = config.togetherai_api_key
-#             self.client = OpenAI(
-#                 api_key=config.togetherai_api_key,
-#                 base_url="https://api.together.xyz/v1"
-#             )
-#         elif config.service == "vLLM":
-#             openai_api_key = "EMPTY"
-#             openai_api_base = "https://3f4bdsdpetv6x5-8000.proxy.runpod.net/v1"
-#             self.client = OpenAI(
-#                 api_key=openai_api_key,
-#                 base_url=openai_api_base,
-#             )
-#         self.eval_tracker: Dict = {}  
-
-        
-#     def initialize(
-#         self, 
-#         first_name: str, 
-#         last_name: str, 
-#         email: str, 
-#         phone_number: str, 
-#         task_instructions: str
-#     ) -> None:
-#         init_template = self.template.format_prompt(
-#             first_name, 
-#             last_name, 
-#             email, 
-#             phone_number, 
-#             task_instructions
-#         )
-#         self.state.conversation_history.append(
-#             Message(role="user", content=init_template)
-#         )
-    
-#     def call_llm(self, return_log_probs: bool = False) -> Tuple[str, Union[None, List[Tuple]]]: 
-#         messages = truncate_message_history(
-#             self.state.conversation_history, 
-#             self.truncation_threshold
-#         )
-
-#         extra_args = {}
-#         if self.seed:
-#             extra_args["seed"] = self.seed
-#         if return_log_probs:
-#             extra_args["logprobs"] = True
-#             extra_args["top_logprobs"] = 1  # only need the generated token
-
-#         response = self.client.chat.completions.create(
-#             model=self.base_model,
-#             messages=[msg.dict() for msg in messages],
-#             temperature=self.temperature,
-#             max_tokens=self.max_tokens,
-#             **extra_args,
-#         )
-
-#         choice = response.choices[0]
-#         text = choice.message.content
-
-#         if not return_log_probs:
-#             return text, None
-
-#         token_logprobs = []
-#         if choice.logprobs is not None:
-#             for item in choice.logprobs.content:
-#                 token_logprobs.append((item.token, item.logprob))
-
-#         return text, token_logprobs
-    
-#     def step(self, world):  
-#         """
-#         Takes conversation, gets LLM response, parses code, executes, updates state
-#         """
-#         llm_output, token_logprobs = self.call_llm(return_log_probs=True)
-        
-#         # Append LLM response to history
-#         self.state.conversation_history.append(
-#             Message(role="assistant", content=llm_output, log_probs=token_logprobs)
-#         )
-        
-#         # Extract and execute code
-#         code = message_parser(llm_output)
-#         observation_string = "No code block found in response."
-        
-#         if code:
-#             try:
-#                 observation = world.execute(code)
-#                 observation_string = str(observation)
-#             except Exception as e:
-#                 observation_string = f"Error: {str(e)}"
-        
-#         # Append observation to history
-#         self.state.conversation_history.append(
-#             Message(role="user", content=observation_string)
-#         )
-        
-#         # Update iteration counter
-#         self.state.iteration += 1
-        
-#         # Check if task completed
-#         if world.task_completed():
-#             self.state.done = True
-        
-#         return world
-    
-#     def run(self, world):
-#         """
-#         Execute agent loop until completion or max iterations
-#         """
-#         while self.state.should_continue:
-#             world = self.step(world)
-            
-#             if self.state.done:
-#                 print(f"Task completed in {self.state.iteration} iterations")
-#                 break
-        
-#         if not self.state.done:
-#             print(f"Max iterations ({self.max_iters}) reached without completion")
-        
-#         return world
-
-from typing import Union
+from typing import Union, Dict, List, Tuple, Optional
 from templates import Template
 from config import Config
 from models import AgentState, Message
 from openai import OpenAI
 import os
-from typing import Dict, Optional
-from utils import message_parser, truncate_message_history, render_chat_to_token_ids
+from utils import message_parser_with_position, truncate_message_history
 
 
 class ReactAgent:
-    def __init__(self, config: Config, return_log_probs: bool = False, seed: int = None) -> None:
+    """
+    ReAct-style agent that interacts with an AppWorld environment.
+    
+    Generates reasoning and code blocks, executes them in the environment,
+    and observes the results. Stores token-level information for RL training.
+    
+    Attributes:
+        max_iters: Maximum number of interaction iterations
+        max_tokens: Maximum tokens per generation
+        temperature: Sampling temperature
+        base_model: Model identifier string
+        state: Current agent state tracking conversation history
+        client: OpenAI-compatible API client
+        eval_tracker: Dictionary for storing evaluation metrics
+    """
+    def __init__(
+        self, 
+        config: Config, 
+        return_log_probs: bool = False, 
+        seed: Optional[int] = None,
+        lora_adapter_path: Optional[str] = None
+    ) -> None:
+        """
+        Initialize ReactAgent with configuration.
+        
+        Args:
+            config: Configuration object with model and service settings
+            return_log_probs: Whether to return log probabilities (deprecated, always True)
+            seed: Random seed for reproducible generation
+        """
+        # For PPO, we train LoRAs so can pass loras direct to vLLM
+        self.lora_adapter_path = lora_adapter_path
+
+        # Max iterations to attempt any given appworld task
         self.max_iters: int = config.max_iters  
+
+        # Max output tokens
         self.max_tokens: int = 512
         self.temperature: float = config.temperature
         self.base_model: str = config.base_model
-        self.base_model_tokenizer: Optional[str]: config.base_model_tokenizer
-        
-        # If tokenizer is set, we can pass tokenized inputs into VLLM
-        if self.base_model_tokenizer:
-            self.tokenizer = AutoTokenizer.from_pretrained(config.base_model)
-
         self.truncation_threshold: int = config.truncation_threshold
         self.template = Template()
         self.state = AgentState(max_iters=config.max_iters)
@@ -185,13 +71,26 @@ class ReactAgent:
 
         
     def initialize(
-        self, 
-        first_name: str, 
-        last_name: str, 
-        email: str, 
-        phone_number: str, 
+        self,
+        first_name: str,
+        last_name: str,
+        email: str,
+        phone_number: str,
         task_instructions: str
     ) -> None:
+        """
+        Initialize agent with task context and user information.
+        
+        Creates the initial system message with task instructions and
+        user profile information.
+        
+        Args:
+            first_name: User's first name
+            last_name: User's last name
+            email: User's email address
+            phone_number: User's phone number
+            task_instructions: Description of the task to accomplish
+        """
         init_template = self.template.format_prompt(
             first_name, 
             last_name, 
@@ -205,16 +104,29 @@ class ReactAgent:
                 content=init_template, 
             )
 
-        if self.tokenizer: # can probably remove this, bc we tokenize everything prior to going into llm
-            # Tokenize the input as vllm would
-            prompt_token_ids = render_chat_to_token_ids(message)
-            message.tokenized_input = prompt_token_ids
-
         self.state.conversation_history.append(
             message
         )
     
-    def call_llm(self, return_log_probs: bool = True) -> Tuple[str, Union[None, List[Tuple]], List[int]]: 
+    def call_llm(
+        self, 
+        return_log_probs: bool = True
+    ) -> Tuple[str, Optional[List[Tuple[str, float, int]]], Optional[List[int]]]:
+        """
+        Call the LLM to generate the next response.
+        
+        Returns token IDs and log probabilities from vLLM to avoid
+        retokenization drift during RL training.
+        
+        Args:
+            return_log_probs: Whether to return log probabilities and token IDs
+        
+        Returns:
+            Tuple containing:
+                - text: Generated text response
+                - token_logprobs: List of (token_str, logprob, token_id) tuples
+                - prompt_token_ids: List of input token IDs
+        """
         messages = truncate_message_history(
             self.state.conversation_history, 
             self.truncation_threshold
@@ -222,18 +134,26 @@ class ReactAgent:
 
         prompt_token_ids = None
 
-        # We can pass either strings or tokens into vllm
-        if self.tokenizer:
-            prompt_token_ids = render_chat_to_token_ids(messages)
-
         extra_args = {}
         if self.seed:
             extra_args["seed"] = self.seed
         if return_log_probs:
             extra_args["logprobs"] = True
             extra_args["top_logprobs"] = 1  # only need the generated token
+            
+            # Tell vLLM to use the LoRA adapter
+            if self.lora_adapter_path:
+                extra_args["extra_body"] = {
+                    "return_token_ids": True,
+                    "lora_request": {
+                        "lora_name": "current_policy",
+                        "lora_path": self.lora_adapter_path
+                    }
+                }
+            else:
+                extra_args["extra_body"] = {"return_token_ids": True}
 
-        if not self.tokenizer:
+        if return_log_probs:
             response = self.client.chat.completions.create(
                 model=self.base_model,
                 messages=[m.dict(exclude={"log_probs", "tokenized_input"}) for m in messages],
@@ -245,29 +165,51 @@ class ReactAgent:
             choice = response.choices[0]
             text = choice.message.content
         else:
-            completion = self.client.completions.create(
+            response = self.client.chat.completions.create(
                 model=self.base_model,
-                prompt=None,                 
-                max_tokens=self.max_tokens,
+                messages=[msg.dict() for msg in messages],
                 temperature=self.temperature,
+                max_tokens=self.max_tokens,
                 **extra_args,
-                extra_body={
-                    "prompt_token_ids": prompt_token_ids, # pass in tokenized input
-                },
             )
-            text = completion.choices[0].text            
+            
+            choice = response.choices[0]
+            text = choice.message.content          
 
         if not return_log_probs:
-            return text, None
+            # In this case we are just baselining, dont need tokens or log probs
+            return text, None, None
 
+        # Build list of (token_str, logprob, token_id) tuples
         token_logprobs = []
         if choice.logprobs is not None:
-            for item in choice.logprobs.content:
-                token_logprobs.append((item.token, item.logprob)) # Note, unlike pytorch inference, logprobs from vllm are not shifted. 
-
-        return text, token_logprobs, prompt_token_ids # output text, output tokens/log probs, input tokens
+            for i, item in enumerate(choice.logprobs.content):
+                token_id = output_token_ids[i] if i < len(output_token_ids) else None
+                token_logprobs.append((item.token, item.logprob, token_id))
+                # Note, unlike pytorch inference, logprobs from vllm are not shifted by 1 index spot. 
+            
+            # Extract output token IDs
+            prompt_token_ids = getattr(response, 'prompt_token_ids', None)
+        
+        # output text, output tokens/log probs, input tokens
+        return text, token_logprobs, prompt_token_ids 
     
-    def step(self, world):  
+    def step(self, world) -> object:  
+        """
+        Execute one step of the ReAct loop.
+        
+        Generates a response, extracts and executes code if present,
+        observes the result, and updates conversation history.
+        
+        Truncates stored outputs to only include content up to the first
+        code block to avoid training on hallucinated future interactions.
+        
+        Args:
+            world: AppWorld environment instance
+        
+        Returns:
+            Updated world object after code execution
+        """
         llm_output, token_logprobs, prompt_token_ids = self.call_llm(return_log_probs=True)
         
         # Log full output for analysis
@@ -283,13 +225,15 @@ class ReactAgent:
                 observation_string = str(observation)
             except Exception as e:
                 observation_string = f"Error: {str(e)}"
-            
+
+            # Truncate log probs to match truncated content
+            # Stop after the closing backticks of the first code block  
             truncated_logprobs = []
             found_opening = False
             backtick_count = 0
             
-            for i, (token, logprob) in enumerate(token_logprobs):
-                truncated_logprobs.append((token, logprob))
+            for i, (token, logprob, token_id) in enumerate(token_logprobs):
+                truncated_logprobs.append((token, logprob, token_id))
                 
                 # Count backtick tokens
                 if token == '```':
@@ -299,11 +243,9 @@ class ReactAgent:
                     elif backtick_count == 2 and found_opening:
                         # Found closing backticks - stop here
                         break
-            # open question: above we are truncating content, should we also for tokenized input?
 
-            # content corresponds to generated outputs, not inputs
-            self.state.conversation_history.append( # we shoudl be storing tokenized inputs here as well
-                # tokenized inputs would be a list of all historic turns, concatenated, and tokenized -> outputs/log probs
+            # Store truncated response (reasoning + code block only)
+            self.state.conversation_history.append( 
                 Message(role="assistant", content=llm_output[:code_end].strip(), log_probs=truncated_logprobs, tokenized_input=prompt_token_ids)
             )
         else:
@@ -324,9 +266,15 @@ class ReactAgent:
         
         return world
     
-    def run(self, world):
+    def run(self, world) -> object:
         """
-        Execute agent loop until completion or max iterations
+        Execute the full agent loop until task completion or max iterations.
+        
+        Args:
+            world: AppWorld environment instance
+        
+        Returns:
+            Final world state after agent execution
         """
         while self.state.should_continue:
             world = self.step(world)

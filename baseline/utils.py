@@ -3,28 +3,49 @@ import re
 from typing import Optional, List
 from models import Message
 
-def message_parser(message: str) -> Optional[str]:
+# def message_parser(message: str) -> Optional[str]:
+#     """
+#     Extract code from markdown code blocks in the message.
+#     Returns the code string if found, None otherwise.
+#     """
+#     # Look for code blocks with ```python or just ```
+#     pattern = r'```(?:python)?\n(.*?)```'
+#     matches = re.findall(pattern, message, re.DOTALL)
+    
+#     if matches:
+#         # Return the first code block found
+#         return matches[0].strip()
+    
+#     # If no markdown blocks, check if the entire message looks like code
+#     # (fallback for models that don't use markdown)
+#     if message.strip().startswith(('print(', 'apis.', 'import ', 'from ')):
+#         return message.strip()
+    
+#     return None
+
+
+def message_parser_with_position(message: str) -> Tuple[Optional[str], Optional[int], Optional[int]]:
     """
-    Extract code from markdown code blocks in the message.
-    Returns the code string if found, None otherwise.
+    Extract code from markdown code blocks and return code + positions.
+    Returns (code, start_pos, end_pos) where positions mark the full code block including ```.
     """
-    # Look for code blocks with ```python or just ```
     pattern = r'```(?:python)?\n(.*?)```'
-    matches = re.findall(pattern, message, re.DOTALL)
+    match = re.search(pattern, message, re.DOTALL)
     
-    if matches:
-        # Return the first code block found
-        return matches[0].strip()
+    if match:
+        code = match.group(1).strip()
+        # match.start() is the position of the opening ```
+        # match.end() is the position after the closing ```
+        return code, match.start(), match.end()
     
-    # If no markdown blocks, check if the entire message looks like code
-    # (fallback for models that don't use markdown)
+    # Fallback for non-markdown code
     if message.strip().startswith(('print(', 'apis.', 'import ', 'from ')):
-        return message.strip()
+        return message.strip(), 0, len(message)
     
-    return None
+    return None, None, None
 
 
-def render_chat_to_token_ids(messages: List[dict], tokenizer):
+def render_chat_to_token_ids(messages: List[dict], tokenizer) -> List[int]:
     # messages is your list of Message objects with .role / .content
     chat = [{"role": m.role, "content": m.content} for m in messages]
 
