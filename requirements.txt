@@ -1,6 +1,7 @@
 torch
 transformers
 peft
+tqdm
 appworld
 openai
 together
