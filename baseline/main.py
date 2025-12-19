@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 from tqdm import tqdm
 
 from appworld import AppWorld, load_task_ids
@@ -112,7 +112,8 @@ def run_evaluation(
     dataset_name: str = "test_normal",
     experiment_name: str = "gpt4o_baseline",
     max_tasks: int = None,
-    config: Config = None
+    config: Config = None,
+    seed: Optional[int] = None
 ) -> Dict:
     """Run evaluation on specified dataset"""
     
@@ -141,6 +142,8 @@ def run_evaluation(
     print(f"📝 Total tasks: {len(task_ids)}")
     print(f"🤖 Model: {config.base_model}")
     print(f"🔄 Max iterations per task: {config.max_iters}")
+    if seed is not None:
+        print(f"🎲 Random seed: {seed}")
     
     eval_tracker = {}
     
@@ -156,7 +159,8 @@ def run_evaluation(
             "iterations": 0,
             "error": None,
             "result": None,
-            "conversation_length": 0
+            "conversation_length": 0,
+            "seed": seed  # Store seed in results
         }
         
         try:
@@ -167,8 +171,8 @@ def run_evaluation(
             ) as world:
                 print(f"📋 Instruction: {world.task.instruction}\n")
                 
-                # Create agent with the task to solve
-                agent = ReactAgent(config)
+                # Create agent with the task to solve (pass seed)
+                agent = ReactAgent(config, seed=seed)
                 agent.initialize(
                     first_name=world.task.supervisor.get("first_name", ""),
                     last_name=world.task.supervisor.get("last_name", ""),
@@ -246,6 +250,12 @@ def main():
         default=None,
         help="Maximum number of tasks to evaluate (for testing)"
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility (default: None for non-deterministic)"
+    )
     
     args = parser.parse_args()
     
@@ -257,7 +267,8 @@ def main():
         dataset_name=args.dataset,
         experiment_name=args.experiment,
         max_tasks=args.max_tasks,
-        config=config
+        config=config,
+        seed=args.seed
     )
     
     print("\n✨ Evaluation complete!")
