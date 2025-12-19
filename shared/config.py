@@ -19,6 +19,7 @@ class Config:
     max_tokens: int = 2000
     temperature: float = 0.0
     base_model_tokenizer: str = os.getenv("VLLM_MODEL") 
+    vllm_url: str = os.getenv("VLLM_URL") 
     
     # Context management
     truncation_threshold: int = 20000  # Characters, not tokens

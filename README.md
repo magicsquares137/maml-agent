@@ -62,7 +62,7 @@ VLLM_MODEL="microsoft/Phi-3-mini-128k-instruct"  # Model to serve
 ### 2. Install Dependencies
 
 **For baseline/evaluation:**
-Note: see https://github.com/stonybrooknlp/appworld/ for installation of AppWorld and data downloads. AppWorld install should be run at directory root, and environment variable should reflect the location where ```appworld download data``` was run
+Note: see https://github.com/stonybrooknlp/appworld/ for installation of AppWorld and data downloads. AppWorld install should be run at directory root, and environment variable should reflect the location where ```appworld download data``` was run. Note that TogetherAI, Appworld, and vLLM have dependency conflicts, and so making separate virtual environments is recommended. 
 ```bash
 pip install -r requirements.txt
 
@@ -96,6 +96,8 @@ vllm serve microsoft/Phi-3-mini-128k-instruct \
   --max-lora-rank 64
 ```
 
+*NOTE*: the paper https://arxiv.org/pdf/2502.01600 uses model Qwen/Qwen2.5-32B-Instruct for tuning and baselining. This requires about 66GB VRAM to host. 
+
 **Important:** LoRA support must be enabled in vLLM for PPO training to work. The training loop loads LoRA adapters dynamically via the vLLM API.
 
 ### 4. Configure Agent
@@ -115,6 +117,11 @@ class Config:
 ### Recommended: Use tmux for Long-Running Jobs
 
 For both baseline evaluation and PPO training, it's highly recommended to use `tmux` to prevent interruptions from network disconnections:
+
+```bash
+apt update
+apt install -y tmux
+```
 
 ```bash
 # Start a new tmux session

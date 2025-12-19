@@ -62,7 +62,7 @@ class ReactAgent:
             )
         elif config.service == "vLLM":
             openai_api_key = "EMPTY"
-            openai_api_base = "https://3f4bdsdpetv6x5-8000.proxy.runpod.net/v1"
+            openai_api_base = config.vllm_url
             self.client = OpenAI(
                 api_key=openai_api_key,
                 base_url=openai_api_base,
