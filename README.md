@@ -62,6 +62,7 @@ VLLM_MODEL="microsoft/Phi-3-mini-128k-instruct"  # Model to serve
 ### 2. Install Dependencies
 
 **For baseline/evaluation:**
+Note: see https://github.com/stonybrooknlp/appworld/ for installation of AppWorld and data downloads. AppWorld install should be run at directory root, and environment variable should reflect the location where ```appworld download data``` was run
 ```bash
 pip install -r requirements.txt
 
