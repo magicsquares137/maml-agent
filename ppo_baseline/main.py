@@ -7,6 +7,7 @@ from appworld import AppWorld, load_task_ids
 from shared.config import Config
 from shared.agent import ReactAgent
 from shared.models import AgentState, Message
+from typing import Dict, Optional, List, Union, Dict
 from appworld import AppWorld, load_task_ids
 
 class PPO_LOOP:

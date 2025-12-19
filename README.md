@@ -95,7 +95,8 @@ vllm serve microsoft/Phi-3-mini-128k-instruct \
   --port 8000 \
   --max-model-len 32768 \
   --enable-lora \
-  --max-lora-rank 64
+  --max-lora-rank 64 \
+  --max-model-len 26000 
 ```
 
 *NOTE*: the paper https://arxiv.org/pdf/2502.01600 uses model Qwen/Qwen2.5-32B-Instruct for tuning and baselining. This requires about 66GB VRAM to host. 
@@ -136,16 +137,14 @@ python main.py --dataset test_normal --experiment phi3_baseline --seed 42
 Run the baseline agent on AppWorld tasks:
 
 ```bash
-cd baseline
-
 # Evaluate on test set with reproducible seed
-python main.py --dataset test_normal --experiment phi3_baseline --seed 42
+python baseline.main.py --dataset test_normal --experiment phi3_baseline --seed 42
 
 # Evaluate on specific number of tasks
-python main.py --dataset test_normal --experiment phi3_test --max-tasks 10 --seed 42
+python baseline.main.py --dataset test_normal --experiment phi3_test --max-tasks 10 --seed 42
 
 # Non-deterministic run (no seed)
-python main.py --dataset test_normal --experiment phi3_baseline
+python baseline.main.py --dataset test_normal --experiment phi3_baseline
 
 # Available datasets: train, dev, test_normal, test_challenge
 ```
@@ -171,13 +170,13 @@ cd ppo_baseline
 
 # Start fresh training (recommended: use tmux)
 tmux new -s ppo_training
-python main.py --iterations 10
+python ppo_baseline.main.py --iterations 10
 
 # Resume from crash/interruption
-python main.py --resume ./checkpoints/checkpoint_latest.pt --iterations 10
+python ppo_baseline.main.py --resume ./checkpoints/checkpoint_latest.pt --iterations 10
 
 # Quick test run
-python main.py --iterations 2
+python ppo_baseline.main.py --iterations 2
 ```
 
 **Training configuration** (edit in `main.py`):
