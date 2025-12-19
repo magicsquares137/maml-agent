@@ -99,7 +99,7 @@ class PPO_LOOP:
                 # Create fresh agent for each rollout
                 agent = ReactAgent(
                     self.config, 
-                    lora_adapter_path=self.current_lora_path,
+                    lora_adapter_path=self.current_lora_path, # note initial lora path will be null so base model will be used
                 )
                 random_uuid = uuid.uuid4()   
 
@@ -252,6 +252,7 @@ class PPO_LOOP:
             
             # Forward pass through NEW policy
             with torch.no_grad():
+                # here we should apply the lora to get the model being updated
                 outputs = self.policy_model(full_ids)
                 logits = outputs.logits[0]  # [seq_len, vocab_size]
             
@@ -340,12 +341,41 @@ class PPO_LOOP:
     
     def train_iteration(self):
         """Run one full training iteration"""
+        print(f"\n{'='*60}")
+        print(f"PPO Iteration {self.iteration}")
+        print(f"{'='*60}")
+        
+        # 1. Collect rollouts with CURRENT policy
+        # (base model on iter 0, LoRA on iter 1+)
         rollouts, task_set = self.collect_rollouts()
         
         # 2. Compute advantages
         updated_rollouts = self.get_advantages(rollouts, task_set)
         
-        # 3. Update policy with PPO
+        # 3. Initialize policy model for training (lazy init after first rollout)
+        if self.policy_model is None:
+            print("Initializing policy model for training...")
+            base_model = AutoModelForCausalLM.from_pretrained(
+                self.config.base_model,
+                torch_dtype=torch.float16,
+                device_map="auto"
+            )
+            
+            # Freeze base model
+            for param in base_model.parameters():
+                param.requires_grad = False
+            
+            # Apply LoRA
+            self.policy_model = get_peft_model(base_model, self.lora_config)
+            
+            # Initialize optimizer
+            self.optimizer = torch.optim.AdamW(
+                self.policy_model.parameters(),
+                lr=self.learning_rate
+            )
+            print("Policy model initialized.")
+        
+        # 4. Update policy with PPO
         for epoch in range(self.n_epochs):
             epoch_loss = 0
             num_batches = 0
@@ -366,10 +396,16 @@ class PPO_LOOP:
             
             print(f"Epoch {epoch+1}/{self.n_epochs}, Avg Loss: {epoch_loss/num_batches:.4f}")
         
+        # 5. Save updated LoRA for next iteration
+        self.iteration += 1
+        self.current_lora_path = f"./checkpoints/lora_iter_{self.iteration}"
+        self.policy_model.save_pretrained(self.current_lora_path)
+        print(f"Saved LoRA to {self.current_lora_path}")
+        
         return updated_rollouts
 
 def main():
-    config = Config()  # Your config
+    config = Config()  
     
     ppo_loop = PPO_LOOP(
         K=6,
@@ -383,18 +419,18 @@ def main():
     
     num_iterations = 10
     for iteration in range(num_iterations):
-        print(f"\n{'='*60}")
-        print(f"Iteration {iteration+1}/{num_iterations}")
-        print(f"{'='*60}")
+        print(f"\n{'='*80}")
+        print(f"Training Iteration {iteration+1}/{num_iterations}")
+        print(f"{'='*80}")
         
         rollouts = ppo_loop.train_iteration()
         
-        # Save checkpoint
-        ppo_loop.policy_model.save_pretrained(f"checkpoints/iter_{iteration}")
-        
         # Log metrics
         avg_reward = sum(r["overall_success"] for r in rollouts) / len(rollouts)
-        print(f"Average Reward: {avg_reward:.4f}")
+        successful_rollouts = sum(1 for r in rollouts if r["completed"])
+        print(f"\n📊 Iteration {iteration+1} Summary:")
+        print(f"  Average Reward: {avg_reward:.4f}")
+        print(f"  Successful Tasks: {successful_rollouts}/{len(rollouts)}")
 
 if __name__ == "__main__":
     main()
