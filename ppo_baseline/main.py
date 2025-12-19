@@ -18,8 +18,34 @@ class PPO_LOOP:
         epsilon: float = 0.2,  # PPO clip parameter
         learning_rate: float = 1e-5,
         n_epochs: int = 3,
-        batch_size: int = 8
-    ):
+        batch_size: int = 8,
+        checkpoint_dir: str = "./checkpoints",
+        resume_from: str = None
+    ) -> None:
+
+        # Set up storage and stats dir
+        self.checkpoint_dir = Path(checkpoint_dir)
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Training metrics tracking
+        self.training_history = {
+            "iterations": [],
+            "avg_rewards": [],
+            "success_rates": [],
+            "avg_losses": [],
+            "completed_tasks": []
+        }
+
+        # Start with None - first rollouts use base model
+        self.current_lora_path = None
+        
+        # Will initialize after first rollout collection
+        self.policy_model = None
+        self.optimizer = None
+        
+        # Resume from checkpoint if specified
+        if resume_from:
+            self.load_checkpoint(resume_from)
         # Number of rollouts per episode
         self.K = K
 
@@ -65,14 +91,106 @@ class PPO_LOOP:
             bias="none",
             task_type="CAUSAL_LM"
         )
+
+    def save_checkpoint(self):
+        """Save full training checkpoint"""
+        checkpoint_path = self.checkpoint_dir / f"checkpoint_iter_{self.iteration}.pt"
         
-        # Start with None - first rollouts use base model
-        self.current_lora_path = None
+        checkpoint = {
+            "iteration": self.iteration,
+            "current_lora_path": self.current_lora_path,
+            "training_history": self.training_history,
+            "optimizer_state": self.optimizer.state_dict() if self.optimizer else None,
+            "config": {
+                "K": self.K,
+                "random_sample_number": self.random_sample_number,
+                "epsilon": self.epsilon,
+                "learning_rate": self.learning_rate,
+                "n_epochs": self.n_epochs,
+                "batch_size": self.batch_size
+            }
+        }
         
-        # Will initialize after first rollout collection
-        self.policy_model = None
-        self.optimizer = None
+        torch.save(checkpoint, checkpoint_path)
+        print(f"💾 Saved checkpoint to {checkpoint_path}")
+        
+        # Also save a "latest" checkpoint
+        latest_path = self.checkpoint_dir / "checkpoint_latest.pt"
+        torch.save(checkpoint, latest_path)
     
+    def load_checkpoint(self, checkpoint_path: str):
+        """Load training checkpoint to resume"""
+        print(f"📂 Loading checkpoint from {checkpoint_path}")
+        
+        checkpoint = torch.load(checkpoint_path)
+        
+        self.iteration = checkpoint["iteration"]
+        self.current_lora_path = checkpoint["current_lora_path"]
+        self.training_history = checkpoint["training_history"]
+        
+        print(f"✅ Resumed from iteration {self.iteration}")
+        print(f"   Current LoRA: {self.current_lora_path}")
+    
+    def save_metrics(self):
+        """Save training metrics to JSON"""
+        metrics_path = self.checkpoint_dir / "training_metrics.json"
+        
+        with open(metrics_path, 'w') as f:
+            json.dump(self.training_history, f, indent=2)
+        
+        print(f"📊 Saved metrics to {metrics_path}")
+    
+    def plot_training_curves(self):
+        """Generate training curves"""
+        if not self.training_history["iterations"]:
+            return
+        
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        
+        # Average Reward
+        axes[0, 0].plot(self.training_history["iterations"], 
+                       self.training_history["avg_rewards"], 
+                       'b-', marker='o')
+        axes[0, 0].set_xlabel('Iteration')
+        axes[0, 0].set_ylabel('Average Reward')
+        axes[0, 0].set_title('Average Reward over Training')
+        axes[0, 0].grid(True)
+        
+        # Success Rate
+        axes[0, 1].plot(self.training_history["iterations"], 
+                       self.training_history["success_rates"], 
+                       'g-', marker='o')
+        axes[0, 1].set_xlabel('Iteration')
+        axes[0, 1].set_ylabel('Success Rate (%)')
+        axes[0, 1].set_title('Task Success Rate over Training')
+        axes[0, 1].grid(True)
+        
+        # Average Loss
+        axes[1, 0].plot(self.training_history["iterations"], 
+                       self.training_history["avg_losses"], 
+                       'r-', marker='o')
+        axes[1, 0].set_xlabel('Iteration')
+        axes[1, 0].set_ylabel('Average Loss')
+        axes[1, 0].set_title('Training Loss over Iterations')
+        axes[1, 0].grid(True)
+        
+        # Completed Tasks
+        axes[1, 1].plot(self.training_history["iterations"], 
+                       self.training_history["completed_tasks"], 
+                       'm-', marker='o')
+        axes[1, 1].set_xlabel('Iteration')
+        axes[1, 1].set_ylabel('Completed Tasks')
+        axes[1, 1].set_title('Completed Tasks per Iteration')
+        axes[1, 1].grid(True)
+        
+        plt.tight_layout()
+        
+        # Save figure
+        fig_path = self.checkpoint_dir / "training_curves.png"
+        plt.savefig(fig_path, dpi=150, bbox_inches='tight')
+        print(f"📈 Saved training curves to {fig_path}")
+        plt.close()
+
     def collect_rollouts(
         self
     ) -> List[dict]:
@@ -396,16 +514,93 @@ class PPO_LOOP:
             
             print(f"Epoch {epoch+1}/{self.n_epochs}, Avg Loss: {epoch_loss/num_batches:.4f}")
         
-        # 5. Save updated LoRA for next iteration
+        # 5. Compute metrics
+        avg_reward = sum(r["overall_success"] for r in updated_rollouts) / len(updated_rollouts)
+        successful_rollouts = sum(1 for r in updated_rollouts if r["completed"])
+        success_rate = (successful_rollouts / len(updated_rollouts)) * 100
+        avg_loss = total_epoch_loss / self.n_epochs
+        
+        # 6. Update training history
+        self.training_history["iterations"].append(self.iteration)
+        self.training_history["avg_rewards"].append(avg_reward)
+        self.training_history["success_rates"].append(success_rate)
+        self.training_history["avg_losses"].append(avg_loss)
+        self.training_history["completed_tasks"].append(successful_rollouts)
+        
+        # 7. Save LoRA and checkpoint
         self.iteration += 1
-        self.current_lora_path = f"./checkpoints/lora_iter_{self.iteration}"
+        self.current_lora_path = str(self.checkpoint_dir / f"lora_iter_{self.iteration}")
         self.policy_model.save_pretrained(self.current_lora_path)
-        print(f"Saved LoRA to {self.current_lora_path}")
+        print(f"💾 Saved LoRA to {self.current_lora_path}")
+        
+        # Save full checkpoint
+        self.save_checkpoint()
+        
+        # Save metrics
+        self.save_metrics()
+        
+        # Plot training curves
+        self.plot_training_curves()
         
         return updated_rollouts
 
+
+def evaluate_lora(lora_path: str, dataset: str = "test_normal", max_tasks: int = None):
+    """
+    Evaluate a trained LoRA on the test set.
+    Uses the same evaluation logic as baseline/main.py
+    """
+    from baseline.main import run_evaluation
+    from baseline.config import Config
+    
+    print(f"\n{'='*80}")
+    print(f"Evaluating LoRA: {lora_path}")
+    print(f"Dataset: {dataset}")
+    print(f"{'='*80}\n")
+    
+    # Create config with LoRA path
+    config = Config()
+    
+    # Run evaluation (will pass lora_path to ReactAgent)
+    experiment_name = f"ppo_eval_{Path(lora_path).name}"
+    
+    results = run_evaluation(
+        dataset_name=dataset,
+        experiment_name=experiment_name,
+        max_tasks=max_tasks,
+        config=config,
+        lora_adapter_path=lora_path  # Pass LoRA to evaluation
+    )
+    
+    return results
+
+
 def main():
-    config = Config()  
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="PPO-LOOP Training")
+    parser.add_argument("--resume", type=str, default=None, 
+                       help="Resume from checkpoint path")
+    parser.add_argument("--eval-only", action="store_true",
+                       help="Only evaluate a trained LoRA")
+    parser.add_argument("--lora-path", type=str, default=None,
+                       help="Path to LoRA for evaluation")
+    parser.add_argument("--iterations", type=int, default=10,
+                       help="Number of training iterations")
+    
+    args = parser.parse_args()
+    
+    # Evaluation mode
+    if args.eval_only:
+        if not args.lora_path:
+            print("❌ Must provide --lora-path for evaluation")
+            return
+        
+        evaluate_lora(args.lora_path, dataset="test_normal")
+        return
+    
+    # Training mode
+    config = Config()
     
     ppo_loop = PPO_LOOP(
         K=6,
@@ -414,23 +609,50 @@ def main():
         epsilon=0.2,
         learning_rate=1e-5,
         n_epochs=3,
-        batch_size=8
+        batch_size=8,
+        checkpoint_dir="./checkpoints",
+        resume_from=args.resume  # Resume if specified
     )
     
-    num_iterations = 10
-    for iteration in range(num_iterations):
-        print(f"\n{'='*80}")
-        print(f"Training Iteration {iteration+1}/{num_iterations}")
-        print(f"{'='*80}")
-        
-        rollouts = ppo_loop.train_iteration()
-        
-        # Log metrics
-        avg_reward = sum(r["overall_success"] for r in rollouts) / len(rollouts)
-        successful_rollouts = sum(1 for r in rollouts if r["completed"])
-        print(f"\n📊 Iteration {iteration+1} Summary:")
-        print(f"  Average Reward: {avg_reward:.4f}")
-        print(f"  Successful Tasks: {successful_rollouts}/{len(rollouts)}")
+    start_iter = ppo_loop.iteration
+    num_iterations = args.iterations
+    
+    print(f"\n🚀 Starting PPO-LOOP Training")
+    print(f"   Iterations: {start_iter} → {start_iter + num_iterations}")
+    print(f"   Checkpoint dir: {ppo_loop.checkpoint_dir}")
+    
+    try:
+        for iteration in range(start_iter, start_iter + num_iterations):
+            print(f"\n{'='*80}")
+            print(f"Training Iteration {iteration+1}/{start_iter + num_iterations}")
+            print(f"{'='*80}")
+            
+            rollouts = ppo_loop.train_iteration()
+            
+            # Log summary
+            avg_reward = sum(r["overall_success"] for r in rollouts) / len(rollouts)
+            successful_rollouts = sum(1 for r in rollouts if r["completed"])
+            print(f"\n📊 Iteration {iteration+1} Summary:")
+            print(f"  Average Reward: {avg_reward:.4f}")
+            print(f"  Successful Tasks: {successful_rollouts}/{len(rollouts)}")
+            print(f"  Success Rate: {(successful_rollouts/len(rollouts)*100):.1f}%")
+    
+    except KeyboardInterrupt:
+        print("\n⚠️  Training interrupted by user")
+        print(f"   Last checkpoint saved at iteration {ppo_loop.iteration}")
+    except Exception as e:
+        print(f"\n❌ Training crashed: {e}")
+        print(f"   Last checkpoint saved at iteration {ppo_loop.iteration}")
+        raise
+    
+    print("\n✨ Training complete!")
+    print(f"   Final LoRA: {ppo_loop.current_lora_path}")
+    print(f"   Checkpoints: {ppo_loop.checkpoint_dir}")
+    
+    # Evaluate final LoRA
+    print("\n🔍 Evaluating final LoRA on test set...")
+    evaluate_lora(ppo_loop.current_lora_path, dataset="test_normal", max_tasks=10)
+
 
 if __name__ == "__main__":
     main()

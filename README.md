@@ -8,7 +8,10 @@ This repository contains:
 - **Baseline**: ReAct-style agent for AppWorld evaluation
 - **PPO Training**: LOOP implementation for training agents with RL
 
-The agent interacts with AppWorld's REPL environment to complete tasks by generating code, observing outputs, and iteratively working toward task completion.
+The agent interacts with AppWorld's REPL environment to complete tasks by generating code, observing outputs, and iteratively working toward task completion. Note that this is a simple implementation of PPO and assumes sequential task running and no needs for sharding. Parallelization will require additional development. 
+
+## Note on usage of AI
+This project codebase was completely hand written to ensure quality and adherence to mathematical structure of PPO-LOOP and AppWorld setup, and then refined using AI (Claude, GPT5.1) to include docstrings, exception handling, and other meta-code operations. 
 
 ## Project Structure
 
