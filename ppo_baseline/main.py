@@ -10,7 +10,7 @@ from shared.models import AgentState, Message
 from typing import Dict, Optional, List, Union, Dict
 from appworld import AppWorld, load_task_ids
 from pathlib import Path
-import tqdm
+from tqdm import tqdm
 
 
 class PPO_LOOP:
