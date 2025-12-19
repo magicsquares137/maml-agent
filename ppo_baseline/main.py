@@ -74,7 +74,7 @@ class PPO_LOOP:
         for x in temp_train_ids:
             print(f"Init difficulty check task {i} of {len(temp_train_ids)}")
             temp_world = AppWorld(task_id=x)
-            if world.task.ground_truth.metadata["difficulty"] in difficulties:
+            if temp_world.task.ground_truth.metadata["difficulty"] in difficulties:
                 self.train_ids.append(x)
             temp_world.close()
             i += 1
