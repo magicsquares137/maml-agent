@@ -57,6 +57,8 @@ APPWORLD_ROOT="/path/to/maml-agent"  # Absolute path to project root
 
 # vLLM Configuration
 VLLM_MODEL="microsoft/Phi-3-mini-128k-instruct"  # Model to serve
+VLLM_URL="localhost:8000/v1"
+LOG_PROBS="NO" # set to NO for main baselining
 ```
 
 ### 2. Install Dependencies

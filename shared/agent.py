@@ -45,6 +45,7 @@ class ReactAgent:
         self.max_iters: int = config.max_iters  
 
         # Max output tokens
+        self.use_log_probs: str = config.use_log_probs
         self.max_tokens: int = 512
         self.temperature: float = config.temperature
         self.base_model: str = config.base_model
@@ -163,7 +164,7 @@ class ReactAgent:
             )
 
             choice = response.choices[0]
-            text = choice.message.content
+            text = choice.message.content    
         else:
             response = self.client.chat.completions.create(
                 model=self.base_model,
@@ -174,7 +175,7 @@ class ReactAgent:
             )
             
             choice = response.choices[0]
-            text = choice.message.content          
+            text = choice.message.content     
 
         if not return_log_probs:
             # In this case we are just baselining, dont need tokens or log probs
@@ -182,14 +183,15 @@ class ReactAgent:
 
         # Build list of (token_str, logprob, token_id) tuples
         token_logprobs = []
+        output_token_ids = getattr(choice, "token_ids", None)
         if choice.logprobs is not None:
             for i, item in enumerate(choice.logprobs.content):
                 token_id = output_token_ids[i] if i < len(output_token_ids) else None
                 token_logprobs.append((item.token, item.logprob, token_id))
                 # Note, unlike pytorch inference, logprobs from vllm are not shifted by 1 index spot. 
             
-            # Extract output token IDs
-            prompt_token_ids = getattr(response, 'prompt_token_ids', None)
+        # Extract output token IDs
+        prompt_token_ids = getattr(response, 'prompt_token_ids', None)
         
         # output text, output tokens/log probs, input tokens
         return text, token_logprobs, prompt_token_ids 
@@ -210,7 +212,10 @@ class ReactAgent:
         Returns:
             Updated world object after code execution
         """
-        llm_output, token_logprobs, prompt_token_ids = self.call_llm(return_log_probs=True)
+        if self.use_log_probs == "NO":
+            llm_output, token_logprobs, prompt_token_ids = self.call_llm(return_log_probs=False)
+        else:
+            llm_output, token_logprobs, prompt_token_ids = self.call_llm(return_log_probs=True)
         
         # Log full output for analysis
         self.eval_tracker[f"iter_{self.state.iteration}_full_output"] = llm_output
@@ -226,23 +231,27 @@ class ReactAgent:
             except Exception as e:
                 observation_string = f"Error: {str(e)}"
 
-            # Truncate log probs to match truncated content
+            # Default: no truncation if we don't have logprobs
+            truncated_logprobs = token_logprobs
+
             # Stop after the closing backticks of the first code block  
-            truncated_logprobs = []
-            found_opening = False
-            backtick_count = 0
-            
-            for i, (token, logprob, token_id) in enumerate(token_logprobs):
-                truncated_logprobs.append((token, logprob, token_id))
+            # Truncate log probs to match truncated content only if we have them
+            if token_logprobs:
+                truncated_logprobs = []
+                found_opening = False
+                backtick_count = 0
                 
-                # Count backtick tokens
-                if token == '```':
-                    backtick_count += 1
-                    if backtick_count == 1:
-                        found_opening = True
-                    elif backtick_count == 2 and found_opening:
-                        # Found closing backticks - stop here
-                        break
+                for i, (token, logprob, token_id) in enumerate(token_logprobs):
+                    truncated_logprobs.append((token, logprob, token_id))
+                    
+                    # Count backtick tokens
+                    if token == '```':
+                        backtick_count += 1
+                        if backtick_count == 1:
+                            found_opening = True
+                        elif backtick_count == 2 and found_opening:
+                            # Found closing backticks - stop here
+                            break
 
             # Store truncated response (reasoning + code block only)
             self.state.conversation_history.append( 

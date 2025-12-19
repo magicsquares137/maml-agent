@@ -20,6 +20,7 @@ class Config:
     temperature: float = 0.0
     base_model_tokenizer: str = os.getenv("VLLM_MODEL") 
     vllm_url: str = os.getenv("VLLM_URL") 
+    use_log_probs: str = os.getenv("LOG_PROBS") # YES or NO, only works YES with PPO 
     
     # Context management
     truncation_threshold: int = 20000  # Characters, not tokens
