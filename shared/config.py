@@ -1,9 +1,10 @@
-# config.py
 from dataclasses import dataclass
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(env_path)
 
 @dataclass 
 class Config:

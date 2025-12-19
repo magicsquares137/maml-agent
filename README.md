@@ -18,19 +18,26 @@ This project codebase was completely hand-written to ensure quality and adherenc
 
 ```
 maml-agent/
-├── baseline/              # Baseline agent implementation
-│   ├── agent.py          # ReAct agent with vLLM integration
-│   ├── config.py         # Configuration management
-│   ├── main.py           # Evaluation script
-│   ├── models.py         # Pydantic models for agent state
-│   ├── templates.py      # Prompt templates
-│   └── utils.py          # Utility functions
-├── ppo_baseline/         # PPO-LOOP training implementation
-│   └── main.py           # PPO training loop with checkpointing
-├── data/                 # Task data (from AppWorld)
-├── experiments/          # Experiment outputs
-├── checkpoints/          # PPO training checkpoints and LoRA weights
-└── requirements.txt      # Python dependencies
+├── .env                    # Environment variables (root level)
+├── .gitignore
+├── README.md
+├── requirements.txt
+├── shared/                 # Shared code
+│   ├── __init__.py
+│   ├── agent.py
+│   ├── config.py          # Loads .env here
+│   ├── models.py
+│   ├── templates.py
+│   └── utils.py
+├── baseline/              # Baseline evaluation
+│   ├── __init__.py
+│   └── main.py
+├── ppo_baseline/          # PPO training
+│   └── main.py
+│   └── __init__.py
+├── data/                  # AppWorld data
+├── experiments/           # Results
+└── checkpoints/  
 ```
 
 ## Setup

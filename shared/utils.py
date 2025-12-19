@@ -1,27 +1,6 @@
-# utils.py
 import re
 from typing import Optional, List
 from models import Message
-
-# def message_parser(message: str) -> Optional[str]:
-#     """
-#     Extract code from markdown code blocks in the message.
-#     Returns the code string if found, None otherwise.
-#     """
-#     # Look for code blocks with ```python or just ```
-#     pattern = r'```(?:python)?\n(.*?)```'
-#     matches = re.findall(pattern, message, re.DOTALL)
-    
-#     if matches:
-#         # Return the first code block found
-#         return matches[0].strip()
-    
-#     # If no markdown blocks, check if the entire message looks like code
-#     # (fallback for models that don't use markdown)
-#     if message.strip().startswith(('print(', 'apis.', 'import ', 'from ')):
-#         return message.strip()
-    
-#     return None
 
 
 def message_parser_with_position(message: str) -> Tuple[Optional[str], Optional[int], Optional[int]]:

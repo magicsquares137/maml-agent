@@ -1,14 +1,16 @@
-# main.py
 import json
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 from tqdm import tqdm
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from shared.config import Config  # .env loaded automatically here
+from shared.agent import ReactAgent
 from appworld import AppWorld, load_task_ids
-from config import Config
-from agent import ReactAgent
 
 def ensure_output_dir(experiment_name: str) -> Path:
     """Create output directory for experiment results"""
