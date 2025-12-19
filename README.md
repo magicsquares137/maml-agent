@@ -170,13 +170,13 @@ cd ppo_baseline
 
 # Start fresh training (recommended: use tmux)
 tmux new -s ppo_training
-python ppo_baseline.main.py --iterations 10
+python -m ppo_baseline.main.py --iterations 10
 
 # Resume from crash/interruption
-python ppo_baseline.main.py --resume ./checkpoints/checkpoint_latest.pt --iterations 10
+python -m ppo_baseline.main.py --resume ./checkpoints/checkpoint_latest.pt --iterations 10
 
 # Quick test run
-python ppo_baseline.main.py --iterations 2
+python -m ppo_baseline.main --iterations 2
 ```
 
 **Training configuration** (edit in `main.py`):
