@@ -4,9 +4,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import random
 import uuid
 from appworld import AppWorld, load_task_ids
-# Add parent to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from shared.config import Config
 from shared.agent import ReactAgent
 from shared.models import AgentState, Message

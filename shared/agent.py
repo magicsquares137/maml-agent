@@ -1,10 +1,10 @@
 from typing import Union, Dict, List, Tuple, Optional
-from templates import Template
-from config import Config
-from models import AgentState, Message
+from shared.templates import Template
+from shared.config import Config
+from shared.models import AgentState, Message
 from openai import OpenAI
 import os
-from utils import message_parser_with_position, truncate_message_history
+from shared.utils import message_parser_with_position, truncate_message_history
 
 
 class ReactAgent:

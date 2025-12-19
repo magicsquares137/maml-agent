@@ -102,15 +102,7 @@ vllm serve microsoft/Phi-3-mini-128k-instruct \
 
 ### 4. Configure Agent
 
-Update `baseline/config.py` with your vLLM server URL:
-
-```python
-class Config:
-    service = "vLLM"
-    base_model = "microsoft/Phi-3-mini-128k-instruct"
-    # Update with your vLLM server address
-    vllm_url = "http://your-gpu-server:8000"
-```
+Update `.env` with your vLLM server URL
 
 ## Usage
 

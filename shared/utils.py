@@ -1,6 +1,6 @@
 import re
 from typing import Optional, List
-from models import Message
+from shared.models import Message
 
 
 def message_parser_with_position(message: str) -> Tuple[Optional[str], Optional[int], Optional[int]]:
