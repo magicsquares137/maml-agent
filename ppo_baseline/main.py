@@ -9,6 +9,8 @@ from shared.agent import ReactAgent
 from shared.models import AgentState, Message
 from typing import Dict, Optional, List, Union, Dict
 from appworld import AppWorld, load_task_ids
+from pathlib import Path
+
 
 class PPO_LOOP:
     def __init__(
