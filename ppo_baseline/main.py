@@ -376,10 +376,8 @@ class PPO_LOOP:
             full_ids = torch.tensor([full_token_ids], device=self.policy_model.device)  # [1, seq_len]
             
             # Forward pass through NEW policy
-            with torch.no_grad():
-                # here we should apply the lora to get the model being updated
-                outputs = self.policy_model(full_ids)
-                logits = outputs.logits[0]  # [seq_len, vocab_size]
+            outputs = self.policy_model(full_ids)
+            logits = outputs.logits[0]  # [seq_len, vocab_size]
             
             # Compute log probabilities
             log_probs = torch.log_softmax(logits, dim=-1)  # [seq_len, vocab_size]
@@ -399,7 +397,7 @@ class PPO_LOOP:
                     continue
                 
                 # Get NEW policy's log probability for this exact token
-                new_logprob = log_probs[position, token_id].item()
+                new_logprob = log_probs[position, token_id]
                 
                 all_token_data.append({
                     'new_logprob': new_logprob,
@@ -423,7 +421,7 @@ class PPO_LOOP:
         Compute PPO loss for a minibatch of episodes.
         Uses per-token importance weights (Equation 5 from paper).
         """
-        total_loss = 0.0
+        total_loss = torch.tensor(0.0, device=self.policy_model.device)
         num_tokens = 0
         
         for episode in minibatch:
@@ -439,7 +437,7 @@ class PPO_LOOP:
                 
                 # Importance ratio: π_new(token) / π_old(token)
                 log_ratio = new_logprob - old_logprob
-                ratio = torch.exp(torch.tensor(log_ratio, dtype=torch.float32))
+                ratio = torch.exp(log_ratio)
                 
                 # Standard PPO clipping: min(ratio * A, clip(ratio, 1-ε, 1+ε) * A)
                 clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
@@ -448,10 +446,9 @@ class PPO_LOOP:
                 surrogate2 = clipped_ratio * advantage
                 
                 # Take minimum and negate (we want to maximize, optimizer minimizes)
-                token_loss = -torch.min(surrogate1, surrogate2)
-                
-                total_loss += token_loss
-                num_tokens += 1
+	            token_loss = -torch.min(surrogate1, surrogate2)
+	            total_loss = total_loss + token_loss
+	            num_tokens += 1
         
         # Average over all tokens in minibatch
         return total_loss / num_tokens if num_tokens > 0 else torch.tensor(0.0, dtype=torch.float32)
