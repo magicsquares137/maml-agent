@@ -26,7 +26,8 @@ with AppWorld(task_id=task_id, experiment_name="debug") as world:
         last_name=world.task.supervisor.get("last_name", ""),
         email=world.task.supervisor.get("email", ""),
         phone_number=world.task.supervisor.get("phone_number", ""),
-        task_instructions=world.task.instruction
+        task_instructions=world.task.instruction,
+        app_descriptions=world.task.app_descriptions
     )
     
     # Run step by step with detailed logging
