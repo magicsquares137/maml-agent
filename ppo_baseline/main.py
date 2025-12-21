@@ -303,15 +303,15 @@ class PPO_LOOP:
 
 			if len(task_rollouts) != self.K:
 				raise Exception(
-					f"Expected {self.K} rollouts for task {task}, but found {actual_rollouts}. "
+					f"Expected {self.K} rollouts for task {task}, but found {len(task_rollouts)}. "
 					f"Check if collect_rollouts() completed successfully."
 				)
 			
-			# Compute average reward across ALL K rollouts, handle for none
-			avg_reward = sum((x["overall_success"] or 0) for x in task_rollouts) / self.K
+			# Compute average reward across ALL K rollouts
+			avg_reward = sum(x.get("overall_success", 0) or 0 for x in task_rollouts) / self.K
 			
 			for rollout in task_rollouts:
-				rollout_reward = rollout["overall_success"]
+				rollout_reward = rollout.get("overall_success", 0) or 0
 				
 				# Equation 3: A(c, x_k) = (K/(K-1)) * (R(c, x_k) - avg_reward)
 				advantage = (self.K / (self.K - 1)) * (rollout_reward - avg_reward)
@@ -607,12 +607,12 @@ def main():
 	config = Config()
 	
 	ppo_loop = PPO_LOOP(
-		K=6,
-		random_sample_number=40,
+		K=2,
+		random_sample_number=2,
 		config=config,
 		epsilon=0.2,
 		learning_rate=1e-5,
-		n_epochs=3,
+		n_epochs=2,
 		batch_size=8,
 		checkpoint_dir="./checkpoints",
 		resume_from=args.resume  # Resume if specified
