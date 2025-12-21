@@ -307,8 +307,8 @@ class PPO_LOOP:
 					f"Check if collect_rollouts() completed successfully."
 				)
 			
-			# Compute average reward across ALL K rollouts
-			avg_reward = sum(x["overall_success"] for x in task_rollouts) / self.K
+			# Compute average reward across ALL K rollouts, handle for none
+			avg_reward = sum((x["overall_success"] or 0) for x in task_rollouts) / self.K
 			
 			for rollout in task_rollouts:
 				rollout_reward = rollout["overall_success"]
