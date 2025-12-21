@@ -77,7 +77,8 @@ class ReactAgent:
         last_name: str,
         email: str,
         phone_number: str,
-        task_instructions: str
+        task_instructions: str,
+        app_descriptions: str
     ) -> None:
         """
         Initialize agent with task context and user information.
@@ -97,7 +98,8 @@ class ReactAgent:
             last_name, 
             email, 
             phone_number, 
-            task_instructions
+            task_instructions,
+            app_descriptions
         )
 
         message = Message(
