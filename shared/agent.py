@@ -46,7 +46,7 @@ class ReactAgent:
 
         # Max output tokens
         self.use_log_probs: str = config.use_log_probs
-        self.max_tokens: int = 512
+        self.max_tokens: int = config.max_tokens
         self.temperature: float = config.temperature
         self.base_model: str = config.base_model
         self.truncation_threshold: int = config.truncation_threshold
