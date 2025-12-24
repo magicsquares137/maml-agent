@@ -16,14 +16,14 @@ class Config:
     service: str = "vLLM" # can set to OpenAI or TogetherAI
     togetherai_api_key: str = os.getenv("TOGETHER_AI")
     base_model: str = os.getenv("VLLM_MODEL") 
-    max_tokens: int = 2000
+    max_tokens: int = 3000
     temperature: float = 0.0
     base_model_tokenizer: str = os.getenv("VLLM_MODEL") 
     vllm_url: str = os.getenv("VLLM_URL") 
     use_log_probs: str = os.getenv("LOG_PROBS") # YES or NO, only works YES with PPO 
     
     # Context management
-    truncation_threshold: int = 20000  # Characters, not tokens
+    truncation_threshold: int = 40000  # Characters, not tokens
 
     # AppWorld Root
     os.environ["APPWORLD_ROOT"] = os.getenv("APPWORLD_ROOT")

@@ -172,7 +172,7 @@ class ReactAgent:
                 model=self.base_model,
                 messages=[msg.dict() for msg in messages],
                 temperature=self.temperature,
-                max_tokens=self.max_tokens,
+                max_completion_tokens=self.max_tokens,
                 **extra_args,
             )
             
@@ -256,8 +256,11 @@ class ReactAgent:
                             break
 
             # Store truncated response (reasoning + code block only)
+            # self.state.conversation_history.append( 
+            #     Message(role="assistant", content=llm_output[:code_end].strip(), log_probs=truncated_logprobs, tokenized_input=prompt_token_ids)
+            # )
             self.state.conversation_history.append( 
-                Message(role="assistant", content=llm_output[:code_end].strip(), log_probs=truncated_logprobs, tokenized_input=prompt_token_ids)
+                Message(role="assistant", content=llm_output, log_probs=token_logprobs, tokenized_input=prompt_token_ids)
             )
         else:
             # No code found - store full response
