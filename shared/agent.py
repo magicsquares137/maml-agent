@@ -113,16 +113,18 @@ class ReactAgent:
     
     def call_llm(
         self, 
-        return_log_probs: bool = True
+        return_log_probs: bool = True,
+        max_retries: int = 3
     ) -> Tuple[str, Optional[List[Tuple[str, float, int]]], Optional[List[int]]]:
         """
-        Call the LLM to generate the next response.
+        Call the LLM to generate the next response with retry logic.
         
         Returns token IDs and log probabilities from vLLM to avoid
         retokenization drift during RL training.
         
         Args:
             return_log_probs: Whether to return log probabilities and token IDs
+            max_retries: Maximum number of retry attempts on failure
         
         Returns:
             Tuple containing:
@@ -156,28 +158,75 @@ class ReactAgent:
             else:
                 extra_args["extra_body"] = {"return_token_ids": True}
 
-        if return_log_probs:
-            response = self.client.chat.completions.create(
-                model=self.base_model,
-                messages=[m.dict(exclude={"log_probs", "tokenized_input"}) for m in messages],
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-                **extra_args,
-            )
+        # if return_log_probs:
+        #     response = self.client.chat.completions.create(
+        #         model=self.base_model,
+        #         messages=[m.dict(exclude={"log_probs", "tokenized_input"}) for m in messages],
+        #         temperature=self.temperature,
+        #         max_tokens=self.max_tokens,
+        #         **extra_args,
+        #     )
 
-            choice = response.choices[0]
-            text = choice.message.content    
-        else:
-            response = self.client.chat.completions.create(
-                model=self.base_model,
-                messages=[msg.dict() for msg in messages],
-                temperature=self.temperature,
-                max_completion_tokens=self.max_tokens,
-                **extra_args,
-            )
+        #     choice = response.choices[0]
+        #     text = choice.message.content    
+        # else:
+        #     response = self.client.chat.completions.create(
+        #         model=self.base_model,
+        #         messages=[msg.dict() for msg in messages],
+        #         temperature=self.temperature,
+        #         max_completion_tokens=self.max_tokens,
+        #         **extra_args,
+        #     )
             
-            choice = response.choices[0]
-            text = choice.message.content     
+        #     choice = response.choices[0]
+        #     text = choice.message.content     
+
+        # Retry loop
+        for attempt in range(max_retries):
+            try:
+                if return_log_probs:
+                    response = self.client.chat.completions.create(
+                        model=self.base_model,
+                        messages=[m.dict(exclude={"log_probs", "tokenized_input"}) for m in messages],
+                        temperature=self.temperature,
+                        max_completion_tokens=self.max_tokens,
+                        **extra_args,
+                    )
+                    choice = response.choices[0]
+                    text = choice.message.content    
+                else:
+                    response = self.client.chat.completions.create(
+                        model=self.base_model,
+                        messages=[msg.dict() for msg in messages],
+                        temperature=self.temperature,
+                        max_completion_tokens=self.max_tokens,
+                        **extra_args,
+                    )
+                    choice = response.choices[0]
+                    text = choice.message.content
+                
+                # Success - break retry loop
+                break
+                
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"⚠️  LLM call failed (attempt {attempt + 1}/{max_retries}): {e}")
+                    import time
+                    time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                    continue
+                else:
+                    # Final attempt failed - return dummy output
+                    print(f"❌ LLM call failed after {max_retries} attempts: {e}")
+                    print("📝 Returning fallback output to continue execution")
+                    
+                    # Return a minimal valid response that will fail gracefully
+                    text = "I encountered an error and cannot proceed."
+                    
+                    if return_log_probs:
+                        # Return empty token data
+                        return text, [], []
+                    else:
+                        return text, None, None
 
         if not return_log_probs:
             # In this case we are just baselining, dont need tokens or log probs
@@ -256,12 +305,12 @@ class ReactAgent:
                             break
 
             # Store truncated response (reasoning + code block only)
-            # self.state.conversation_history.append( 
-            #     Message(role="assistant", content=llm_output[:code_end].strip(), log_probs=truncated_logprobs, tokenized_input=prompt_token_ids)
-            # )
             self.state.conversation_history.append( 
-                Message(role="assistant", content=llm_output, log_probs=token_logprobs, tokenized_input=prompt_token_ids)
+                Message(role="assistant", content=llm_output[:code_end].strip(), log_probs=truncated_logprobs, tokenized_input=prompt_token_ids)
             )
+            # self.state.conversation_history.append( 
+            #     Message(role="assistant", content=llm_output, log_probs=token_logprobs, tokenized_input=prompt_token_ids)
+            # )
         else:
             # No code found - store full response
             self.state.conversation_history.append(
