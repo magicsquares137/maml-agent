@@ -178,7 +178,8 @@ def run_evaluation(
                     email=world.task.supervisor.get("email", ""),
                     phone_number=world.task.supervisor.get("phone_number", ""),
                     task_instructions=world.task.instruction,
-                    app_descriptions=world.task.app_descriptions
+                    app_descriptions=world.task.app_descriptions,
+                    world=world
                 )
                 
                 # Run agent
