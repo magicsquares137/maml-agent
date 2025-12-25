@@ -5,7 +5,7 @@ from shared.models import AgentState, Message
 from openai import OpenAI
 import os
 from shared.utils import message_parser_with_position, truncate_message_history
-
+import json
 
 class ReactAgent:
     """
