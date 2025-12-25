@@ -3,24 +3,77 @@ from typing import Optional, List, Tuple
 from shared.models import Message
 
 
-def message_parser_with_position(message: str) -> Tuple[Optional[str], Optional[int], Optional[int]]:
+# def message_parser_with_position(message: str) -> Tuple[Optional[str], Optional[int], Optional[int]]:
+#     """
+#     Extract code from markdown code blocks and return code + positions.
+#     Returns (code, start_pos, end_pos) where positions mark the full code block including ```.
+#     """
+#     pattern = r'```(?:python)?\n(.*?)```'
+#     match = re.search(pattern, message, re.DOTALL)
+    
+#     if match:
+#         code = match.group(1).strip()
+#         # match.start() is the position of the opening ```
+#         # match.end() is the position after the closing ```
+#         return code, match.start(), match.end()
+    
+#     # Fallback for non-markdown code
+#     if message.strip().startswith(('print(', 'apis.', 'import ', 'from ')):
+#         return message.strip(), 0, len(message)
+    
+#     return None, None, None
+
+def message_parser_with_position(
+    message: str, 
+    ignore_multiple_calls: bool = True
+) -> Tuple[Optional[str], Optional[int], Optional[int]]:
     """
-    Extract code from markdown code blocks and return code + positions.
-    Returns (code, start_pos, end_pos) where positions mark the full code block including ```.
+    Extract code matching AppWorld's exact logic.
+    Returns (code, start_pos, end_pos) of the code block to store in history.
     """
-    pattern = r'```(?:python)?\n(.*?)```'
-    match = re.search(pattern, message, re.DOTALL)
+    # Match AppWorld's regexes EXACTLY
+    full_code_regex = r"```python\n(.*?)```"  # Requires 'python'
+    partial_code_regex = r".*```python\n(.*)"  # For incomplete blocks
     
-    if match:
-        code = match.group(1).strip()
-        # match.start() is the position of the opening ```
-        # match.end() is the position after the closing ```
-        return code, match.start(), match.end()
+    output_code = ""
+    text_end_pos = len(message)
+    match_end = 0
+    first_match_start = None
     
-    # Fallback for non-markdown code
-    if message.strip().startswith(('print(', 'apis.', 'import ', 'from ')):
-        return message.strip(), 0, len(message)
+    # Handle complete code blocks
+    for re_match in re.finditer(full_code_regex, message, re.DOTALL):
+        code = re_match.group(1).strip()
+        
+        if first_match_start is None:
+            first_match_start = re_match.start()
+        
+        if ignore_multiple_calls:
+            # Return first block only
+            return code, re_match.start(), re_match.end()
+        
+        output_code += code + "\n"
+        match_end = re_match.end()
     
+    # Check for partial code (missing closing ```)
+    partial_match = re.match(partial_code_regex, message[match_end:], re.DOTALL)
+    if partial_match:
+        output_code += partial_match.group(1).strip()
+        
+        # For storage, we need to know where this partial block started
+        if first_match_start is None:
+            # The partial block is the first/only code
+            partial_start = message.find("```python")
+            if partial_start >= 0:
+                first_match_start = partial_start
+        
+        # End position is end of message (since it's incomplete)
+        return output_code.strip(), first_match_start or 0, len(message)
+    
+    if output_code:
+        # Had complete blocks
+        return output_code.strip(), first_match_start or 0, match_end
+    
+    # No code blocks found at all
     return None, None, None
 
 

@@ -16,7 +16,7 @@ class Config:
     service: str = "vLLM" # can set to OpenAI or TogetherAI
     togetherai_api_key: str = os.getenv("TOGETHER_AI")
     base_model: str = os.getenv("VLLM_MODEL") 
-    max_tokens: int = 3000
+    max_tokens: int = 100000
     temperature: float = 0.0
     base_model_tokenizer: str = os.getenv("VLLM_MODEL") 
     vllm_url: str = os.getenv("VLLM_URL") 

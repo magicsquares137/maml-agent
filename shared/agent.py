@@ -28,7 +28,8 @@ class ReactAgent:
         config: Config, 
         return_log_probs: bool = False, 
         seed: Optional[int] = None,
-        lora_adapter_path: Optional[str] = None
+        lora_adapter_path: Optional[str] = None,
+        truncate: bool = False
     ) -> None:
         """
         Initialize ReactAgent with configuration.
@@ -53,6 +54,7 @@ class ReactAgent:
         self.template = Template()
         self.state = AgentState(max_iters=config.max_iters)
         self.seed = seed
+        self.truncate = truncate
         if config.service == "OpenAI":
             self.client = OpenAI(api_key=config.openai_api_key)
         elif config.service == "TogetherAI":
@@ -137,10 +139,13 @@ class ReactAgent:
                 - token_logprobs: List of (token_str, logprob, token_id) tuples
                 - prompt_token_ids: List of input token IDs
         """
-        messages = truncate_message_history(
-            self.state.conversation_history, 
-            self.truncation_threshold
-        )
+        if self.truncate:
+            messages = truncate_message_history(
+                self.state.conversation_history, 
+                self.truncation_threshold
+            )
+        else:
+            messages = self.state.conversation_history
 
         prompt_token_ids = None
 
@@ -287,6 +292,15 @@ class ReactAgent:
             except Exception as e:
                 observation_string = f"Error: {str(e)}"
 
+            # Store text up to end of code block (matches AppWorld)
+            stored_content = llm_output[:code_end]
+            
+            # Handle partial code - add closing backticks if missing
+            if not stored_content.rstrip().endswith("```"):
+                if not stored_content.endswith("\n"):
+                    stored_content += "\n"
+                stored_content += "```"
+
             # Default: no truncation if we don't have logprobs
             truncated_logprobs = token_logprobs
 
@@ -311,7 +325,13 @@ class ReactAgent:
 
             # Store truncated response (reasoning + code block only)
             self.state.conversation_history.append( 
-                Message(role="assistant", content=llm_output[:code_end].strip(), log_probs=truncated_logprobs, tokenized_input=prompt_token_ids)
+                Message(
+                    role="assistant", 
+                    #content=llm_output[:code_end].strip(), 
+                    content=stored_content.strip(), 
+                    log_probs=truncated_logprobs, 
+                    tokenized_input=prompt_token_ids
+                )
             )
             # self.state.conversation_history.append( 
             #     Message(role="assistant", content=llm_output, log_probs=token_logprobs, tokenized_input=prompt_token_ids)
@@ -319,7 +339,12 @@ class ReactAgent:
         else:
             # No code found - store full response
             self.state.conversation_history.append(
-                Message(role="assistant", content=llm_output, log_probs=token_logprobs, tokenized_input=prompt_token_ids)
+                Message(
+                    role="assistant", 
+                    content=llm_output, 
+                    log_probs=token_logprobs, 
+                    tokenized_input=prompt_token_ids
+                )
             )
         
         # Append real observation
