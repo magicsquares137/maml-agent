@@ -93,13 +93,18 @@ class ReactAgent:
             phone_number: User's phone number
             task_instructions: Description of the task to accomplish
         """
+        app_descriptions_full = json.dumps(
+            [{"name": k, "description": v} for (k, v) in world.task.app_descriptions.items()],
+            indent=1,
+        )
+
         init_template = self.template.format_prompt(
             first_name, 
             last_name, 
             email, 
             phone_number, 
             task_instructions,
-            app_descriptions
+            app_descriptions_full
         )
 
         message = Message(
