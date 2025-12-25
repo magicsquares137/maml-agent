@@ -1,4 +1,4 @@
-from typing import Union, Dict, List, Tuple, Optional
+from typing import Union, Dict, List, Tuple, Optional, Any
 from shared.templates import Template
 from shared.config import Config
 from shared.models import AgentState, Message
@@ -80,7 +80,8 @@ class ReactAgent:
         email: str,
         phone_number: str,
         task_instructions: str,
-        app_descriptions: str
+        app_descriptions: str,
+        world: Any
     ) -> None:
         """
         Initialize agent with task context and user information.
