@@ -261,7 +261,7 @@ class PPO_LOOP:
 	                appworld_config={
 	                    "random_seed": 100,
 	                },
-	                prompt_file_path="experiments/prompts/react_code_agent/instructions.txt",
+	                prompt_file_path="/workspace/appworld/appworld/experiments/prompts/react_code_agent/instructions.txt",
 	                ignore_multiple_calls=True,
 	                max_prompt_length=None,  # No truncation (match baseline)
 	                max_output_length=None,  # No truncation (match baseline)
