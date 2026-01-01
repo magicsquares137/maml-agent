@@ -201,154 +201,154 @@ class PPO_LOOP:
 
 
 	def collect_rollouts(self) -> List[dict]:
-	    """Collect rollouts using AppWorld's SimplifiedReActCodeAgent"""
-	    from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
-	    
-	    # Collect task ids
-	    task_set = random.sample(self.train_ids, self.random_sample_number)
-	    all_rollouts = []
-	    
-	    for index, task_id in enumerate(
-	        tqdm(
-	            task_set, 
-	            desc=f"Running base policy rollouts for {len(task_set)} tasks"
-	        )
-	    ):
-	        print(f"\n{'='*60}")
-	        print(f"Task {index + 1}/{len(task_set)}: {task_id}")
-	        print(f"{'='*60}")
-	        
-	        for rollout in range(self.K):
-	            print(f"\n{'='*60}")
-	            print(f"Task {task_id} rollout: {rollout}")
-	            print(f"{'='*60}")
-	            
-	            # Create AppWorld agent
-	            agent = SimplifiedReActCodeAgent(
-	                model_config={
-	                    "client_name": "openai",
-	                    "api_type": "chat_completions",
-	                    "base_url": self.config.vllm_url,
-	                    "name": self.config.base_model,
-	                    "api_key_env_name": "NO_API_KEY",
-	                    "temperature": self.config.temperature,
-	                    "seed": 100,
-	                    "logprobs": True,
-	                    "top_logprobs": 1,
-	                    "extra_body": {
-	                        "return_token_ids": True,
-	                        # Add LoRA if present
-	                        **({"lora_request": {
-	                            "lora_name": "current_policy",
-	                            "lora_path": self.current_lora_path
-	                        }} if self.current_lora_path else {})
-	                    },
-	                    "max_completion_tokens": self.config.max_tokens,
-	                    "cost_per_token": {
-	                        "input_cache_hit": 0.0,
-	                        "input_cache_miss": 0.0,
-	                        "input_cache_write": 0.0,
-	                        "output": 0.0
-	                    },
-	                    "retry_after_n_seconds": 15,
-	                    "use_cache": False,
-	                    "max_retries": 100,
-	                },
-	                logger_config={
-	                    "color": True,
-	                    "verbose": self.config.get("verbose", True),
-	                },
-	                appworld_config={
-	                    "random_seed": 100,
-	                },
-	                prompt_file_path="/workspace/appworld/appworld/experiments/prompts/react_code_agent/instructions.txt",
-	                ignore_multiple_calls=True,
-	                max_prompt_length=None,  # No truncation (match baseline)
-	                max_output_length=None,  # No truncation (match baseline)
-	                max_steps=self.config.max_iters,
-	            )
-	            
-	            random_uuid = uuid.uuid4()
-	            task_result = {
-	                "task_id": task_id,
-	                "completed": False,
-	                "iterations": 0,
-	                "error": None,
-	                "conversation_length": 0,
-	                "overall_success": None,
-	                "uuid": random_uuid,
-	                "agent_state": None,
-	                "evaluation_details": None
-	            }
-	            
+		"""Collect rollouts using AppWorld's SimplifiedReActCodeAgent"""
+		from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
+		
+		# Collect task ids
+		task_set = random.sample(self.train_ids, self.random_sample_number)
+		all_rollouts = []
+		
+		for index, task_id in enumerate(
+			tqdm(
+				task_set, 
+				desc=f"Running base policy rollouts for {len(task_set)} tasks"
+			)
+		):
+			print(f"\n{'='*60}")
+			print(f"Task {index + 1}/{len(task_set)}: {task_id}")
+			print(f"{'='*60}")
+			
+			for rollout in range(self.K):
+				print(f"\n{'='*60}")
+				print(f"Task {task_id} rollout: {rollout}")
+				print(f"{'='*60}")
+				
+				# Create AppWorld agent
+				agent = SimplifiedReActCodeAgent(
+					model_config={
+						"client_name": "openai",
+						"api_type": "chat_completions",
+						"base_url": self.config.vllm_url,
+						"name": self.config.base_model,
+						"api_key_env_name": "NO_API_KEY",
+						"temperature": self.config.temperature,
+						"seed": 100,
+						"logprobs": True,
+						"top_logprobs": 1,
+						"extra_body": {
+							"return_token_ids": True,
+							# Add LoRA if present
+							**({"lora_request": {
+								"lora_name": "current_policy",
+								"lora_path": self.current_lora_path
+							}} if self.current_lora_path else {})
+						},
+						"max_completion_tokens": self.config.max_tokens,
+						"cost_per_token": {
+							"input_cache_hit": 0.0,
+							"input_cache_miss": 0.0,
+							"input_cache_write": 0.0,
+							"output": 0.0
+						},
+						"retry_after_n_seconds": 15,
+						"use_cache": False,
+						"max_retries": 100,
+					},
+					logger_config={
+						"color": True,
+						"verbose": self.config.get("verbose", True),
+					},
+					appworld_config={
+						"random_seed": 100,
+					},
+					prompt_file_path="/workspace/appworld/appworld/experiments/prompts/react_code_agent/instructions.txt",
+					ignore_multiple_calls=True,
+					max_prompt_length=None,  # No truncation (match baseline)
+					max_output_length=None,  # No truncation (match baseline)
+					max_steps=self.config.max_iters,
+				)
+				
+				random_uuid = uuid.uuid4()
+				task_result = {
+					"task_id": task_id,
+					"completed": False,
+					"iterations": 0,
+					"error": None,
+					"conversation_length": 0,
+					"overall_success": None,
+					"uuid": random_uuid,
+					"agent_state": None,
+					"evaluation_details": None
+				}
+				
 			try:
-			    # Initialize logger (required by AppWorld agent)
-			    agent.logger.initialize(
-			        experiment_name="ppo_training",
-			        num_tasks=len(task_set) * self.K,
-			        num_processes=1,
-			        process_index=0,
-			    )
-			    
-			    # Solve task using their method
-			    agent.solve_task(task_id)
-			    
-			    # ===== GET RESULTS BEFORE DB CLOSES =====
-			    # Access world state BEFORE it closes
-			    completed = agent.world.task_completed()
-			    evaluation = agent.world.evaluate().to_dict()
-			    overall_success = len(evaluation['passes']) / evaluation['num_tests']
-			    # ==========================================
-			    
-			    # ===== CONVERT TO YOUR PYDANTIC FORMAT =====
-			    agent_state = self.convert_to_agent_state(agent)
-			    # ===========================================
-			    
-			    # Store results (using variables we captured earlier)
-			    task_result["completed"] = completed
-			    task_result["iterations"] = agent.step_number
-			    task_result["conversation_length"] = len(agent_state.conversation_history)
-			    task_result["overall_success"] = overall_success
-			    task_result["evaluation_details"] = evaluation
-			    task_result["agent_state"] = agent_state
-			    
-			    print(f"\n✅ Task finished: {task_result['completed']}")
-			    print(f"🔄 Iterations: {task_result['iterations']}")
-			    print(f"📊 Success: {overall_success:.3f}")
-			    
+				# Initialize logger (required by AppWorld agent)
+				agent.logger.initialize(
+					experiment_name="ppo_training",
+					num_tasks=len(task_set) * self.K,
+					num_processes=1,
+					process_index=0,
+				)
+				
+				# Solve task using their method
+				agent.solve_task(task_id)
+				
+				# ===== GET RESULTS BEFORE DB CLOSES =====
+				# Access world state BEFORE it closes
+				completed = agent.world.task_completed()
+				evaluation = agent.world.evaluate().to_dict()
+				overall_success = len(evaluation['passes']) / evaluation['num_tests']
+				# ==========================================
+				
+				# ===== CONVERT TO YOUR PYDANTIC FORMAT =====
+				agent_state = self.convert_to_agent_state(agent)
+				# ===========================================
+				
+				# Store results (using variables we captured earlier)
+				task_result["completed"] = completed
+				task_result["iterations"] = agent.step_number
+				task_result["conversation_length"] = len(agent_state.conversation_history)
+				task_result["overall_success"] = overall_success
+				task_result["evaluation_details"] = evaluation
+				task_result["agent_state"] = agent_state
+				
+				print(f"\n✅ Task finished: {task_result['completed']}")
+				print(f"🔄 Iterations: {task_result['iterations']}")
+				print(f"📊 Success: {overall_success:.3f}")
+				
 			except Exception as e:
-			    task_result["error"] = str(e)
-			    print(f"\n❌ Error in task {task_id}: {e}")
-			    import traceback
-			    traceback.print_exc()
-			    task_result["agent_state"] = None
-	    
-	    return all_rollouts, task_set
+				task_result["error"] = str(e)
+				print(f"\n❌ Error in task {task_id}: {e}")
+				import traceback
+				traceback.print_exc()
+				task_result["agent_state"] = None
+		
+		return all_rollouts, task_set
 
 	def convert_to_agent_state(self, appworld_agent) -> AgentState:
-	    agent_state = AgentState(max_iters=appworld_agent.max_steps)
-	    
-	    for msg in appworld_agent.messages:
-	        if msg["role"] == "assistant" and msg.get("logprobs"):
-	            pydantic_msg = Message(
-	                role=msg["role"],
-	                content=msg["content"],
-	                log_probs=msg["logprobs"],
-	                tokenized_input=msg.get("prompt_token_ids")
-	            )
-	            agent_state.conversation_history.append(pydantic_msg)
-	        elif msg["role"] == "user":
-	            pydantic_msg = Message(
-	                role=msg["role"],
-	                content=msg["content"]
-	            )
-	            agent_state.conversation_history.append(pydantic_msg)
-	    
-	    agent_state.iteration = appworld_agent.step_number
-	    # DON'T access agent.world here - it might be closed!
-	    # agent_state.done will be set by the caller
-	    
-	    return agent_state
+		agent_state = AgentState(max_iters=appworld_agent.max_steps)
+		
+		for msg in appworld_agent.messages:
+			if msg["role"] == "assistant" and msg.get("logprobs"):
+				pydantic_msg = Message(
+					role=msg["role"],
+					content=msg["content"],
+					log_probs=msg["logprobs"],
+					tokenized_input=msg.get("prompt_token_ids")
+				)
+				agent_state.conversation_history.append(pydantic_msg)
+			elif msg["role"] == "user":
+				pydantic_msg = Message(
+					role=msg["role"],
+					content=msg["content"]
+				)
+				agent_state.conversation_history.append(pydantic_msg)
+		
+		agent_state.iteration = appworld_agent.step_number
+		# DON'T access agent.world here - it might be closed!
+		# agent_state.done will be set by the caller
+		
+		return agent_state
 
 	# def collect_rollouts(
 	# 	self
@@ -605,60 +605,60 @@ class PPO_LOOP:
 	# 	# Average over all tokens in minibatch
 	# 	return total_loss / num_tokens if num_tokens > 0 else torch.tensor(0.0, dtype=torch.float32)
 	def compute_ppo_loss(self, minibatch):
-	    """
-	    Compute PPO loss for a minibatch of episodes.
-	    Uses per-token importance weights (Equation 5 from paper).
-	    """
-	    total_loss = torch.tensor(0.0, device=self.policy_model.device)
-	    num_tokens = 0
-	    
-	    for episode in minibatch:
-	        # Skip episodes that failed or have no agent_state
-	        if episode.get("agent_state") is None:
-	            print(f"⚠️  Skipping episode {episode.get('task_id')} - no agent_state")
-	            continue
-	            
-	        # Skip episodes with errors
-	        if episode.get("error") is not None:
-	            print(f"⚠️  Skipping episode {episode.get('task_id')} - error: {episode.get('error')}")
-	            continue
-	        
-	        # Compute new log probs and get token data
-	        episode = self.compute_log_probs(episode)  
-	        token_data = episode.get("token_level_data", [])
-	        
-	        # Skip if no tokens
-	        if len(token_data) == 0:
-	            print(f"⚠️  Skipping episode {episode.get('task_id')} - no tokens")
-	            continue
-	        
-	        advantage = episode["advantage"]
-	        
-	        for token_info in token_data:
-	            new_logprob = token_info['new_logprob']
-	            old_logprob = token_info['old_logprob']
-	            
-	            # Importance ratio: π_new(token) / π_old(token)
-	            log_ratio = new_logprob - old_logprob
-	            ratio = torch.exp(log_ratio)
-	            
-	            # Standard PPO clipping: min(ratio * A, clip(ratio, 1-ε, 1+ε) * A)
-	            clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
-	            
-	            surrogate1 = ratio * advantage
-	            surrogate2 = clipped_ratio * advantage
-	            
-	            # Take minimum and negate (we want to maximize, optimizer minimizes)
-	            token_loss = -torch.min(surrogate1, surrogate2)
-	            total_loss = total_loss + token_loss
-	            num_tokens += 1
-	    
-	    # Average over all tokens in minibatch
-	    if num_tokens == 0:
-	        print("⚠️  WARNING: No valid tokens in minibatch! Returning zero loss.")
-	        return torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
-	    
-	    return total_loss / num_tokens
+		"""
+		Compute PPO loss for a minibatch of episodes.
+		Uses per-token importance weights (Equation 5 from paper).
+		"""
+		total_loss = torch.tensor(0.0, device=self.policy_model.device)
+		num_tokens = 0
+		
+		for episode in minibatch:
+			# Skip episodes that failed or have no agent_state
+			if episode.get("agent_state") is None:
+				print(f"⚠️  Skipping episode {episode.get('task_id')} - no agent_state")
+				continue
+				
+			# Skip episodes with errors
+			if episode.get("error") is not None:
+				print(f"⚠️  Skipping episode {episode.get('task_id')} - error: {episode.get('error')}")
+				continue
+			
+			# Compute new log probs and get token data
+			episode = self.compute_log_probs(episode)  
+			token_data = episode.get("token_level_data", [])
+			
+			# Skip if no tokens
+			if len(token_data) == 0:
+				print(f"⚠️  Skipping episode {episode.get('task_id')} - no tokens")
+				continue
+			
+			advantage = episode["advantage"]
+			
+			for token_info in token_data:
+				new_logprob = token_info['new_logprob']
+				old_logprob = token_info['old_logprob']
+				
+				# Importance ratio: π_new(token) / π_old(token)
+				log_ratio = new_logprob - old_logprob
+				ratio = torch.exp(log_ratio)
+				
+				# Standard PPO clipping: min(ratio * A, clip(ratio, 1-ε, 1+ε) * A)
+				clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
+				
+				surrogate1 = ratio * advantage
+				surrogate2 = clipped_ratio * advantage
+				
+				# Take minimum and negate (we want to maximize, optimizer minimizes)
+				token_loss = -torch.min(surrogate1, surrogate2)
+				total_loss = total_loss + token_loss
+				num_tokens += 1
+		
+		# Average over all tokens in minibatch
+		if num_tokens == 0:
+			print("⚠️  WARNING: No valid tokens in minibatch! Returning zero loss.")
+			return torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
+		
+		return total_loss / num_tokens
 	
 	def shuffled_batchify(self, data, batch_size):
 		indices = list(range(len(data)))
