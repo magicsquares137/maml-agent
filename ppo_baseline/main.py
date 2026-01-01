@@ -281,55 +281,54 @@ class PPO_LOOP:
 	                "evaluation_details": None
 	            }
 	            
-	            try:
-	                # Initialize logger (required by AppWorld agent)
-	                agent.logger.initialize(
-	                    experiment_name="ppo_training",
-	                    num_tasks=len(task_set) * self.K,
-	                    num_processes=1,
-	                    process_index=0,
-	                )
-	                
-	                # Solve task using their method
-	                agent.solve_task(task_id)
-	                
-	                # ===== CONVERT TO YOUR PYDANTIC FORMAT =====
-	                agent_state = self.convert_to_agent_state(agent)
-	                # ===========================================
-	                
-	                # Collect results
-	                task_result["completed"] = agent.world.task_completed()
-	                task_result["iterations"] = agent.step_number
-	                task_result["conversation_length"] = len(agent_state.conversation_history)
-	                
-	                # Get performance metrics
-	                evaluation = agent.world.evaluate().to_dict()
-	                task_result["overall_success"] = len(evaluation['passes']) / evaluation['num_tests']
-	                task_result["evaluation_details"] = evaluation
-	                
-	                # Store Pydantic state (with logprobs!)
-	                task_result["agent_state"] = agent_state
-	                
-	                print(f"\n✅ Task finished: {task_result['completed']}")
-	                print(f"🔄 Iterations: {task_result['iterations']}")
-	                
-	            except Exception as e:
-	                task_result["error"] = str(e)
-	                print(f"\n❌ Error: {e}")
-	                import traceback
-	                traceback.print_exc()
-	                task_result["agent_state"] = None
-	            
-	            all_rollouts.append(task_result)
+			try:
+			    # Initialize logger (required by AppWorld agent)
+			    agent.logger.initialize(
+			        experiment_name="ppo_training",
+			        num_tasks=len(task_set) * self.K,
+			        num_processes=1,
+			        process_index=0,
+			    )
+			    
+			    # Solve task using their method
+			    agent.solve_task(task_id)
+			    
+			    # ===== GET RESULTS BEFORE DB CLOSES =====
+			    # Access world state BEFORE it closes
+			    completed = agent.world.task_completed()
+			    evaluation = agent.world.evaluate().to_dict()
+			    overall_success = len(evaluation['passes']) / evaluation['num_tests']
+			    # ==========================================
+			    
+			    # ===== CONVERT TO YOUR PYDANTIC FORMAT =====
+			    agent_state = self.convert_to_agent_state(agent)
+			    # ===========================================
+			    
+			    # Store results (using variables we captured earlier)
+			    task_result["completed"] = completed
+			    task_result["iterations"] = agent.step_number
+			    task_result["conversation_length"] = len(agent_state.conversation_history)
+			    task_result["overall_success"] = overall_success
+			    task_result["evaluation_details"] = evaluation
+			    task_result["agent_state"] = agent_state
+			    
+			    print(f"\n✅ Task finished: {task_result['completed']}")
+			    print(f"🔄 Iterations: {task_result['iterations']}")
+			    print(f"📊 Success: {overall_success:.3f}")
+			    
+			except Exception as e:
+			    task_result["error"] = str(e)
+			    print(f"\n❌ Error in task {task_id}: {e}")
+			    import traceback
+			    traceback.print_exc()
+			    task_result["agent_state"] = None
 	    
 	    return all_rollouts, task_set
-
 
 	def convert_to_agent_state(self, appworld_agent) -> AgentState:
 	    agent_state = AgentState(max_iters=appworld_agent.max_steps)
 	    
 	    for msg in appworld_agent.messages:
-	        # Only include messages that have logprobs (actual LLM generations)
 	        if msg["role"] == "assistant" and msg.get("logprobs"):
 	            pydantic_msg = Message(
 	                role=msg["role"],
@@ -338,7 +337,6 @@ class PPO_LOOP:
 	                tokenized_input=msg.get("prompt_token_ids")
 	            )
 	            agent_state.conversation_history.append(pydantic_msg)
-	        # Include all user messages (observations)
 	        elif msg["role"] == "user":
 	            pydantic_msg = Message(
 	                role=msg["role"],
@@ -347,7 +345,8 @@ class PPO_LOOP:
 	            agent_state.conversation_history.append(pydantic_msg)
 	    
 	    agent_state.iteration = appworld_agent.step_number
-	    agent_state.done = appworld_agent.world.task_completed()
+	    # DON'T access agent.world here - it might be closed!
+	    # agent_state.done will be set by the caller
 	    
 	    return agent_state
 
