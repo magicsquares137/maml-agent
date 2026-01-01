@@ -27,7 +27,11 @@ class Config:
 
     # AppWorld Root
     os.environ["APPWORLD_ROOT"] = os.getenv("APPWORLD_ROOT")
-    
+
+    def get(self, key, default=None):
+        """Allow dict-style access"""
+        return getattr(self, key, default)
+
     @classmethod
     def for_model(cls, model_name: str):
         """Factory method for different model configs"""
