@@ -201,29 +201,19 @@ class PPO_LOOP:
 
 
 	def collect_rollouts(self) -> List[dict]:
-		"""Collect rollouts using AppWorld's SimplifiedReActCodeAgent"""
 		from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
 		
-		# Collect task ids
 		task_set = random.sample(self.train_ids, self.random_sample_number)
 		all_rollouts = []
 		
-		for index, task_id in enumerate(
-			tqdm(
-				task_set, 
-				desc=f"Running base policy rollouts for {len(task_set)} tasks"
-			)
-		):
+		for index, task_id in enumerate(tqdm(task_set, desc=f"Running rollouts")):
 			print(f"\n{'='*60}")
 			print(f"Task {index + 1}/{len(task_set)}: {task_id}")
 			print(f"{'='*60}")
 			
 			for rollout in range(self.K):
-				print(f"\n{'='*60}")
-				print(f"Task {task_id} rollout: {rollout}")
-				print(f"{'='*60}")
+				print(f"\nRollout {rollout}")
 				
-				# Create AppWorld agent
 				agent = SimplifiedReActCodeAgent(
 					model_config={
 						"client_name": "openai",
@@ -235,14 +225,7 @@ class PPO_LOOP:
 						"seed": 100,
 						"logprobs": True,
 						"top_logprobs": 1,
-						"extra_body": {
-							"return_token_ids": True,
-							# Add LoRA if present
-							**({"lora_request": {
-								"lora_name": "current_policy",
-								"lora_path": self.current_lora_path
-							}} if self.current_lora_path else {})
-						},
+						"extra_body": {"return_token_ids": True},
 						"max_completion_tokens": self.config.max_tokens,
 						"cost_per_token": {
 							"input_cache_hit": 0.0,
@@ -254,21 +237,15 @@ class PPO_LOOP:
 						"use_cache": False,
 						"max_retries": 100,
 					},
-					logger_config={
-						"color": True,
-						"verbose": self.config.get("verbose", True),
-					},
-					appworld_config={
-						"random_seed": 100,
-					},
+					logger_config={"color": True, "verbose": False},
+					appworld_config={"random_seed": 100},
 					prompt_file_path="/workspace/appworld/appworld/experiments/prompts/react_code_agent/instructions.txt",
 					ignore_multiple_calls=True,
-					max_prompt_length=None,  # No truncation (match baseline)
-					max_output_length=None,  # No truncation (match baseline)
+					max_prompt_length=None,
+					max_output_length=None,
 					max_steps=self.config.max_iters,
 				)
 				
-				random_uuid = uuid.uuid4()
 				task_result = {
 					"task_id": task_id,
 					"completed": False,
@@ -276,52 +253,43 @@ class PPO_LOOP:
 					"error": None,
 					"conversation_length": 0,
 					"overall_success": None,
-					"uuid": random_uuid,
+					"uuid": uuid.uuid4(),
 					"agent_state": None,
 					"evaluation_details": None
 				}
 				
-			try:
-				# Initialize logger (required by AppWorld agent)
-				agent.logger.initialize(
-					experiment_name="ppo_training",
-					num_tasks=len(task_set) * self.K,
-					num_processes=1,
-					process_index=0,
-				)
+				try:  # INDENT THIS - INSIDE THE LOOP!
+					agent.logger.initialize("ppo_training", len(task_set) * self.K, 1, 0)
+					agent.solve_task(task_id)
+					
+					completed = agent.world.task_completed()
+					evaluation = agent.world.evaluate().to_dict()
+					overall_success = len(evaluation['passes']) / evaluation['num_tests']
+					
+					agent_state = self.convert_to_agent_state(agent)
+					agent_state.done = completed
+					
+					task_result["completed"] = completed
+					task_result["iterations"] = agent.step_number
+					task_result["conversation_length"] = len(agent_state.conversation_history)
+					task_result["overall_success"] = overall_success
+					task_result["evaluation_details"] = evaluation
+					task_result["agent_state"] = agent_state
+					
+					print(f"✅ Success: {overall_success:.3f}")
+					
+				except Exception as e:
+					task_result["error"] = str(e)
+					print(f"❌ Error: {e}")
+					task_result["agent_state"] = None
 				
-				# Solve task using their method
-				agent.solve_task(task_id)
+				finally:
+					# Clean up database
+					if hasattr(agent, 'world'):
+						agent.world.close()
+					del agent
 				
-				# ===== GET RESULTS BEFORE DB CLOSES =====
-				# Access world state BEFORE it closes
-				completed = agent.world.task_completed()
-				evaluation = agent.world.evaluate().to_dict()
-				overall_success = len(evaluation['passes']) / evaluation['num_tests']
-				# ==========================================
-				
-				# ===== CONVERT TO YOUR PYDANTIC FORMAT =====
-				agent_state = self.convert_to_agent_state(agent)
-				# ===========================================
-				
-				# Store results (using variables we captured earlier)
-				task_result["completed"] = completed
-				task_result["iterations"] = agent.step_number
-				task_result["conversation_length"] = len(agent_state.conversation_history)
-				task_result["overall_success"] = overall_success
-				task_result["evaluation_details"] = evaluation
-				task_result["agent_state"] = agent_state
-				
-				print(f"\n✅ Task finished: {task_result['completed']}")
-				print(f"🔄 Iterations: {task_result['iterations']}")
-				print(f"📊 Success: {overall_success:.3f}")
-				
-			except Exception as e:
-				task_result["error"] = str(e)
-				print(f"\n❌ Error in task {task_id}: {e}")
-				import traceback
-				traceback.print_exc()
-				task_result["agent_state"] = None
+				all_rollouts.append(task_result)
 		
 		return all_rollouts, task_set
 
