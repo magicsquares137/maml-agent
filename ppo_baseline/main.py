@@ -9,6 +9,7 @@ from shared.agent import ReactAgent
 from shared.models import AgentState, Message
 from typing import Dict, Optional, List, Union, Dict
 from appworld import AppWorld, load_task_ids
+from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
 from pathlib import Path
 from tqdm import tqdm
 
@@ -198,90 +199,241 @@ class PPO_LOOP:
 		print(f"📈 Saved training curves to {fig_path}")
 		plt.close()
 
-	def collect_rollouts(
-		self
-	) -> List[dict]:
 
-		# Collect task ids
-		task_set = random.sample(self.train_ids, self.random_sample_number)
-		all_rollouts = []
+	def collect_rollouts(self) -> List[dict]:
+	    """Collect rollouts using AppWorld's SimplifiedReActCodeAgent"""
+	    from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
+	    
+	    # Collect task ids
+	    task_set = random.sample(self.train_ids, self.random_sample_number)
+	    all_rollouts = []
+	    
+	    for index, task_id in enumerate(
+	        tqdm(
+	            task_set, 
+	            desc=f"Running base policy rollouts for {len(task_set)} tasks"
+	        )
+	    ):
+	        print(f"\n{'='*60}")
+	        print(f"Task {index + 1}/{len(task_set)}: {task_id}")
+	        print(f"{'='*60}")
+	        
+	        for rollout in range(self.K):
+	            print(f"\n{'='*60}")
+	            print(f"Task {task_id} rollout: {rollout}")
+	            print(f"{'='*60}")
+	            
+	            # Create AppWorld agent
+	            agent = SimplifiedReActCodeAgent(
+	                model_config={
+	                    "client_name": "openai",
+	                    "api_type": "chat_completions",
+	                    "base_url": self.config.vllm_url,
+	                    "name": self.config.base_model,
+	                    "api_key_env_name": "NO_API_KEY",
+	                    "temperature": self.config.temperature,
+	                    "seed": 100,
+	                    "logprobs": True,
+	                    "top_logprobs": 1,
+	                    "extra_body": {
+	                        "return_token_ids": True,
+	                        # Add LoRA if present
+	                        **({"lora_request": {
+	                            "lora_name": "current_policy",
+	                            "lora_path": self.current_lora_path
+	                        }} if self.current_lora_path else {})
+	                    },
+	                    "max_completion_tokens": self.config.max_tokens,
+	                    "cost_per_token": {
+	                        "input_cache_hit": 0.0,
+	                        "input_cache_miss": 0.0,
+	                        "input_cache_write": 0.0,
+	                        "output": 0.0
+	                    },
+	                    "retry_after_n_seconds": 15,
+	                    "use_cache": False,
+	                    "max_retries": 100,
+	                },
+	                logger_config={
+	                    "color": True,
+	                    "verbose": self.config.get("verbose", True),
+	                },
+	                appworld_config={
+	                    "random_seed": 100,
+	                },
+	                prompt_file_path="experiments/prompts/react_code_agent/instructions.txt",
+	                ignore_multiple_calls=True,
+	                max_prompt_length=None,  # No truncation (match baseline)
+	                max_output_length=None,  # No truncation (match baseline)
+	                max_steps=self.config.max_iters,
+	            )
+	            
+	            random_uuid = uuid.uuid4()
+	            task_result = {
+	                "task_id": task_id,
+	                "completed": False,
+	                "iterations": 0,
+	                "error": None,
+	                "conversation_length": 0,
+	                "overall_success": None,
+	                "uuid": random_uuid,
+	                "agent_state": None,
+	                "evaluation_details": None
+	            }
+	            
+	            try:
+	                # Initialize logger (required by AppWorld agent)
+	                agent.logger.initialize(
+	                    experiment_name="ppo_training",
+	                    num_tasks=len(task_set) * self.K,
+	                    num_processes=1,
+	                    process_index=0,
+	                )
+	                
+	                # Solve task using their method
+	                agent.solve_task(task_id)
+	                
+	                # ===== CONVERT TO YOUR PYDANTIC FORMAT =====
+	                agent_state = self.convert_to_agent_state(agent)
+	                # ===========================================
+	                
+	                # Collect results
+	                task_result["completed"] = agent.world.task_completed()
+	                task_result["iterations"] = agent.step_number
+	                task_result["conversation_length"] = len(agent_state.conversation_history)
+	                
+	                # Get performance metrics
+	                evaluation = agent.world.evaluate().to_dict()
+	                task_result["overall_success"] = len(evaluation['passes']) / evaluation['num_tests']
+	                task_result["evaluation_details"] = evaluation
+	                
+	                # Store Pydantic state (with logprobs!)
+	                task_result["agent_state"] = agent_state
+	                
+	                print(f"\n✅ Task finished: {task_result['completed']}")
+	                print(f"🔄 Iterations: {task_result['iterations']}")
+	                
+	            except Exception as e:
+	                task_result["error"] = str(e)
+	                print(f"\n❌ Error: {e}")
+	                import traceback
+	                traceback.print_exc()
+	            
+	            all_rollouts.append(task_result)
+	    
+	    return all_rollouts, task_set
 
-		for index, task_id in enumerate(
-			tqdm(
-				task_set, 
-				desc=f" Running base policy rollouts for {len(task_set)} tasks"
-				)
-			):
-			print(f"\n{'='*60}")
-			print(f"Task {index + 1}/{len(task_set)}: {task_id}")
-			print(f"{'='*60}")
 
-			for rollout in range(self.K):
-				print(f"\n{'='*60}")
-				print(f"Task {task_id} rollout: {rollout}")
-				print(f"{'='*60}")
+	def convert_to_agent_state(self, appworld_agent) -> AgentState:
+	    agent_state = AgentState(max_iters=appworld_agent.max_steps)
+	    
+	    for msg in appworld_agent.messages:
+	        # Only include messages that have logprobs (actual LLM generations)
+	        if msg["role"] == "assistant" and msg.get("logprobs"):
+	            pydantic_msg = Message(
+	                role=msg["role"],
+	                content=msg["content"],
+	                log_probs=msg["logprobs"],
+	                tokenized_input=msg.get("prompt_token_ids")
+	            )
+	            agent_state.conversation_history.append(pydantic_msg)
+	        # Include all user messages (observations)
+	        elif msg["role"] == "user":
+	            pydantic_msg = Message(
+	                role=msg["role"],
+	                content=msg["content"]
+	            )
+	            agent_state.conversation_history.append(pydantic_msg)
+	    
+	    agent_state.iteration = appworld_agent.step_number
+	    agent_state.done = appworld_agent.world.task_completed()
+	    
+	    return agent_state
 
-				# Create fresh agent for each rollout
-				agent = ReactAgent(
-					self.config, 
-					lora_adapter_path=self.current_lora_path, # note initial lora path will be null so base model will be used
-				)
-				random_uuid = uuid.uuid4()   
+	# def collect_rollouts(
+	# 	self
+	# ) -> List[dict]:
 
-				# Note: each dict below will end up being around .45KB            
-				task_result = {
-					"task_id": task_id,
-					"completed": False,
-					"iterations": 0,
-					"error": None,
-					"conversation_length": 0,
-					"overall_success": None,
-					"uuid": random_uuid,
-					"agent_state": None,
-					"evaluation_details": None
-				}
+	# 	# Collect task ids
+	# 	task_set = random.sample(self.train_ids, self.random_sample_number)
+	# 	all_rollouts = []
 
-				try:
-					# Load the appworld environment for the task
-					with AppWorld(
-						task_id=task_id,
-						experiment_name="ppo_training",
-					) as world: 
-						print(f"📋 Instruction: {world.task.instruction}\n")
-						agent.initialize(
-							first_name=world.task.supervisor.get("first_name", ""),
-							last_name=world.task.supervisor.get("last_name", ""),
-							email=world.task.supervisor.get("email", ""),
-							phone_number=world.task.supervisor.get("phone_number", ""),
-							task_instructions=world.task.instruction
-						)   
+	# 	for index, task_id in enumerate(
+	# 		tqdm(
+	# 			task_set, 
+	# 			desc=f" Running base policy rollouts for {len(task_set)} tasks"
+	# 			)
+	# 		):
+	# 		print(f"\n{'='*60}")
+	# 		print(f"Task {index + 1}/{len(task_set)}: {task_id}")
+	# 		print(f"{'='*60}")
 
-						# Complete the task
-						agent.run(world) 
+	# 		for rollout in range(self.K):
+	# 			print(f"\n{'='*60}")
+	# 			print(f"Task {task_id} rollout: {rollout}")
+	# 			print(f"{'='*60}")
 
-						# Collect results
-						task_result["completed"] = world.task_completed()
-						task_result["iterations"] = agent.state.iteration
-						task_result["conversation_length"] = len(agent.state.conversation_history)
+	# 			# Create fresh agent for each rollout
+	# 			agent = ReactAgent(
+	# 				self.config, 
+	# 				lora_adapter_path=self.current_lora_path, # note initial lora path will be null so base model will be used
+	# 			)
+	# 			random_uuid = uuid.uuid4()   
+
+	# 			# Note: each dict below will end up being around .45KB            
+	# 			task_result = {
+	# 				"task_id": task_id,
+	# 				"completed": False,
+	# 				"iterations": 0,
+	# 				"error": None,
+	# 				"conversation_length": 0,
+	# 				"overall_success": None,
+	# 				"uuid": random_uuid,
+	# 				"agent_state": None,
+	# 				"evaluation_details": None
+	# 			}
+
+	# 			try:
+	# 				# Load the appworld environment for the task
+	# 				with AppWorld(
+	# 					task_id=task_id,
+	# 					experiment_name="ppo_training",
+	# 				) as world: 
+	# 					print(f"📋 Instruction: {world.task.instruction}\n")
+	# 					agent.initialize(
+	# 						first_name=world.task.supervisor.get("first_name", ""),
+	# 						last_name=world.task.supervisor.get("last_name", ""),
+	# 						email=world.task.supervisor.get("email", ""),
+	# 						phone_number=world.task.supervisor.get("phone_number", ""),
+	# 						task_instructions=world.task.instruction
+	# 					)   
+
+	# 					# Complete the task
+	# 					agent.run(world)  
+
+	# 					# Collect results
+	# 					task_result["completed"] = world.task_completed()
+	# 					task_result["iterations"] = agent.state.iteration
+	# 					task_result["conversation_length"] = len(agent.state.conversation_history)
 							
-						# Get performance metrics
-						evaluation = world.evaluate().to_dict()
+	# 					# Get performance metrics
+	# 					evaluation = world.evaluate().to_dict()
 						
-						task_result["overall_success"] = len(evaluation['passes'])/evaluation['num_tests']
-						task_result["evaluation_details"] = evaluation
+	# 					task_result["overall_success"] = len(evaluation['passes'])/evaluation['num_tests']
+	# 					task_result["evaluation_details"] = evaluation
 					
-					print(f"\nTask finished: {task_result['completed']}")
-					print(f"🔄 Iterations: {task_result['iterations']}")
-				except Exception as e:
-					task_result["error"] = str(e)
-					print(f"\n Error: {e}")
+	# 				print(f"\nTask finished: {task_result['completed']}")
+	# 				print(f"🔄 Iterations: {task_result['iterations']}")
+	# 			except Exception as e:
+	# 				task_result["error"] = str(e)
+	# 				print(f"\n Error: {e}")
 
-				# Attach the agents state to cache log probs/tokens
-				task_result["agent_state"] = agent.state
+	# 			# Attach the agents state to cache log probs/tokens
+	# 			task_result["agent_state"] = agent.state
 
-				all_rollouts.append(task_result)
+	# 			all_rollouts.append(task_result)
 
-		return all_rollouts, task_set
+	# 	return all_rollouts, task_set
 
 	def get_advantages(
 		self, 
