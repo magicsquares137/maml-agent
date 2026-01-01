@@ -318,6 +318,7 @@ class PPO_LOOP:
 	                print(f"\n❌ Error: {e}")
 	                import traceback
 	                traceback.print_exc()
+	                task_result["agent_state"] = None
 	            
 	            all_rollouts.append(task_result)
 	    
@@ -568,42 +569,97 @@ class PPO_LOOP:
 		return episode
 
 
+	# def compute_ppo_loss(self, minibatch):
+	# 	"""
+	# 	Compute PPO loss for a minibatch of episodes.
+	# 	Uses per-token importance weights (Equation 5 from paper).
+	# 	"""
+	# 	total_loss = torch.tensor(0.0, device=self.policy_model.device)
+	# 	num_tokens = 0
+		
+	# 	for episode in minibatch:
+	# 		# Compute new log probs and get token data
+	# 		episode = self.compute_log_probs(episode)  
+	# 		token_data = episode["token_level_data"] 
+			
+	# 		advantage = episode["advantage"]
+			
+	# 		for token_info in token_data:
+	# 			new_logprob = token_info['new_logprob']
+	# 			old_logprob = token_info['old_logprob']
+				
+	# 			# Importance ratio: π_new(token) / π_old(token)
+	# 			log_ratio = new_logprob - old_logprob
+	# 			ratio = torch.exp(log_ratio)
+				
+	# 			# Standard PPO clipping: min(ratio * A, clip(ratio, 1-ε, 1+ε) * A)
+	# 			clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
+				
+	# 			surrogate1 = ratio * advantage
+	# 			surrogate2 = clipped_ratio * advantage
+				
+	# 			# Take minimum and negate (we want to maximize, optimizer minimizes)
+	# 			token_loss = -torch.min(surrogate1, surrogate2)
+	# 			total_loss = total_loss + token_loss
+	# 			num_tokens += 1
+		
+	# 	# Average over all tokens in minibatch
+	# 	return total_loss / num_tokens if num_tokens > 0 else torch.tensor(0.0, dtype=torch.float32)
 	def compute_ppo_loss(self, minibatch):
-		"""
-		Compute PPO loss for a minibatch of episodes.
-		Uses per-token importance weights (Equation 5 from paper).
-		"""
-		total_loss = torch.tensor(0.0, device=self.policy_model.device)
-		num_tokens = 0
-		
-		for episode in minibatch:
-			# Compute new log probs and get token data
-			episode = self.compute_log_probs(episode)  
-			token_data = episode["token_level_data"] 
-			
-			advantage = episode["advantage"]
-			
-			for token_info in token_data:
-				new_logprob = token_info['new_logprob']
-				old_logprob = token_info['old_logprob']
-				
-				# Importance ratio: π_new(token) / π_old(token)
-				log_ratio = new_logprob - old_logprob
-				ratio = torch.exp(log_ratio)
-				
-				# Standard PPO clipping: min(ratio * A, clip(ratio, 1-ε, 1+ε) * A)
-				clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
-				
-				surrogate1 = ratio * advantage
-				surrogate2 = clipped_ratio * advantage
-				
-				# Take minimum and negate (we want to maximize, optimizer minimizes)
-				token_loss = -torch.min(surrogate1, surrogate2)
-				total_loss = total_loss + token_loss
-				num_tokens += 1
-		
-		# Average over all tokens in minibatch
-		return total_loss / num_tokens if num_tokens > 0 else torch.tensor(0.0, dtype=torch.float32)
+	    """
+	    Compute PPO loss for a minibatch of episodes.
+	    Uses per-token importance weights (Equation 5 from paper).
+	    """
+	    total_loss = torch.tensor(0.0, device=self.policy_model.device)
+	    num_tokens = 0
+	    
+	    for episode in minibatch:
+	        # Skip episodes that failed or have no agent_state
+	        if episode.get("agent_state") is None:
+	            print(f"⚠️  Skipping episode {episode.get('task_id')} - no agent_state")
+	            continue
+	            
+	        # Skip episodes with errors
+	        if episode.get("error") is not None:
+	            print(f"⚠️  Skipping episode {episode.get('task_id')} - error: {episode.get('error')}")
+	            continue
+	        
+	        # Compute new log probs and get token data
+	        episode = self.compute_log_probs(episode)  
+	        token_data = episode.get("token_level_data", [])
+	        
+	        # Skip if no tokens
+	        if len(token_data) == 0:
+	            print(f"⚠️  Skipping episode {episode.get('task_id')} - no tokens")
+	            continue
+	        
+	        advantage = episode["advantage"]
+	        
+	        for token_info in token_data:
+	            new_logprob = token_info['new_logprob']
+	            old_logprob = token_info['old_logprob']
+	            
+	            # Importance ratio: π_new(token) / π_old(token)
+	            log_ratio = new_logprob - old_logprob
+	            ratio = torch.exp(log_ratio)
+	            
+	            # Standard PPO clipping: min(ratio * A, clip(ratio, 1-ε, 1+ε) * A)
+	            clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
+	            
+	            surrogate1 = ratio * advantage
+	            surrogate2 = clipped_ratio * advantage
+	            
+	            # Take minimum and negate (we want to maximize, optimizer minimizes)
+	            token_loss = -torch.min(surrogate1, surrogate2)
+	            total_loss = total_loss + token_loss
+	            num_tokens += 1
+	    
+	    # Average over all tokens in minibatch
+	    if num_tokens == 0:
+	        print("⚠️  WARNING: No valid tokens in minibatch! Returning zero loss.")
+	        return torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
+	    
+	    return total_loss / num_tokens
 	
 	def shuffled_batchify(self, data, batch_size):
 		indices = list(range(len(data)))
