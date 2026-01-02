@@ -285,8 +285,8 @@ class PPO_LOOP:
 				
 				finally:
 					# Clean up database
-					if hasattr(agent, 'world'):
-						agent.world.close()
+					# if hasattr(agent, 'world'):
+					# 	agent.world.close()
 					del agent
 				
 				all_rollouts.append(task_result)
