@@ -213,6 +213,13 @@ class PPO_LOOP:
 			
 			for rollout in range(self.K):
 				print(f"\nRollout {rollout}")
+
+			import os
+
+			# Set environment variables
+			os.environ["OPENAI_API_KEY"] = "EMPTY"
+			os.environ["NO_API_KEY"] = "EMPTY"
+			os.environ["MODEL_SERVER_URL"] = "http://localhost:8000"
 				
 				agent = SimplifiedReActCodeAgent(
 					model_config={
@@ -262,8 +269,9 @@ class PPO_LOOP:
 					agent.logger.initialize("ppo_training", len(task_set) * self.K, 1, 0)
 					agent.solve_task(task_id)
 					
-					completed = agent.world.task_completed()
+					#completed = agent.world.task_completed()
 					evaluation = agent.world.evaluate().to_dict()
+					completed = evaluation["success"]
 					overall_success = len(evaluation['passes']) / evaluation['num_tests']
 					
 					agent_state = self.convert_to_agent_state(agent)
