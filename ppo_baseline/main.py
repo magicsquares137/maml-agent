@@ -12,7 +12,7 @@ from appworld import AppWorld, load_task_ids
 from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
 from pathlib import Path
 from tqdm import tqdm
-
+import os
 
 class PPO_LOOP:
 	def __init__(
