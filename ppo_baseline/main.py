@@ -214,12 +214,12 @@ class PPO_LOOP:
 			for rollout in range(self.K):
 				print(f"\nRollout {rollout}")
 
-			import os
+				import os
 
-			# Set environment variables
-			os.environ["OPENAI_API_KEY"] = "EMPTY"
-			os.environ["NO_API_KEY"] = "EMPTY"
-			os.environ["MODEL_SERVER_URL"] = "http://localhost:8000"
+				# Set environment variables
+				os.environ["OPENAI_API_KEY"] = "EMPTY"
+				os.environ["NO_API_KEY"] = "EMPTY"
+				os.environ["MODEL_SERVER_URL"] = "http://localhost:8000"
 				
 				agent = SimplifiedReActCodeAgent(
 					model_config={
