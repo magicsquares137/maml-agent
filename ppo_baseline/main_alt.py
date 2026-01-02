@@ -104,111 +104,111 @@ class PPO_LOOP:
 			task_type="CAUSAL_LM"
 		)
 
-        self.vllm_process = None
-        self.vllm_port = 8000
-        self.vllm_host = "localhost"
+		self.vllm_process = None
+		self.vllm_port = 8000
+		self.vllm_host = "localhost"
 
-    def start_vllm_server(self, lora_path: str = None):
-        """Start vLLM server with optional LoRA adapter"""
-        print("\n🚀 Starting vLLM server...")
-        
-        cmd = [
-            "vllm", "serve", self.config.base_model,
-            "--port", str(self.vllm_port),
-            "--max-model-len", "25192",
-            "--gpu-memory-utilization", "0.45",
-            "--enable-lora",
-            "--max-loras", "2",
-            "--max-lora-rank", "64"
-        ]
-        
-        # Set environment for vLLM
-        env = os.environ.copy()
-        
-        # Add LoRA if specified
-        if lora_path:
-            # vLLM can load LoRAs via --lora-modules flag
-            cmd.extend([
-                "--lora-modules", f"ppo_adapter={lora_path}"
-            ])
-            print(f"   Loading LoRA: {lora_path}")
-        else:
-            print("   Loading base model (no LoRA)")
-        
-        # Start vLLM process
-        self.vllm_process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env
-        )
-        
-        # Wait for server to be ready
-        print("   Waiting for vLLM to start...", end="", flush=True)
-        max_wait_time = 360  
-        for i in range(max_wait_time):
-            try:
-                response = requests.get(
-                    f"http://{self.vllm_host}:{self.vllm_port}/health",
-                    timeout=1
-                )
-                if response.status_code == 200:
-                    print(" ✅ Ready!")
-                    # Extra wait to ensure fully ready
-                    time.sleep(2)
-                    return True
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-                pass
-            
-            time.sleep(1)
-            if i % 10 == 0 and i > 0:
-                print(f".", end="", flush=True)
-        
-        print(" ❌ Failed to start!")
-        return False
-    
-    def stop_vllm_server(self):
-        """Stop vLLM server and free GPU memory"""
-        if self.vllm_process is None:
-            print("\n⚠️  No vLLM process to stop")
-            return
-        
-        print("\n🛑 Stopping vLLM server...")
-        
-        try:
-            # Graceful shutdown
-            self.vllm_process.send_signal(signal.SIGTERM)
-            
-            try:
-                self.vllm_process.wait(timeout=15)
-                print("   ✅ vLLM stopped gracefully")
-            except subprocess.TimeoutExpired:
-                print("   ⚠️  Timeout, force killing...")
-                self.vllm_process.kill()
-                self.vllm_process.wait()
-                print("   ✅ vLLM force killed")
-        
-        except Exception as e:
-            print(f"   ⚠️  Error stopping vLLM: {e}")
-        
-        finally:
-            self.vllm_process = None
-            
-            # Extra cleanup - kill any remaining vLLM processes
-            try:
-                subprocess.run(
-                    ["pkill", "-9", "-f", "vllm.entrypoints"],
-                    stderr=subprocess.DEVNULL,
-                    timeout=5
-                )
-            except:
-                pass
-            
-            # Wait for GPU memory to be freed
-            print("   Waiting for GPU cleanup...", end="", flush=True)
-            time.sleep(5)
-            torch.cuda.empty_cache()
-            print(" Done")
+	def start_vllm_server(self, lora_path: str = None):
+		"""Start vLLM server with optional LoRA adapter"""
+		print("\n🚀 Starting vLLM server...")
+		
+		cmd = [
+			"vllm", "serve", self.config.base_model,
+			"--port", str(self.vllm_port),
+			"--max-model-len", "25192",
+			"--gpu-memory-utilization", "0.45",
+			"--enable-lora",
+			"--max-loras", "2",
+			"--max-lora-rank", "64"
+		]
+		
+		# Set environment for vLLM
+		env = os.environ.copy()
+		
+		# Add LoRA if specified
+		if lora_path:
+			# vLLM can load LoRAs via --lora-modules flag
+			cmd.extend([
+				"--lora-modules", f"ppo_adapter={lora_path}"
+			])
+			print(f"   Loading LoRA: {lora_path}")
+		else:
+			print("   Loading base model (no LoRA)")
+		
+		# Start vLLM process
+		self.vllm_process = subprocess.Popen(
+			cmd,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.PIPE,
+			env=env
+		)
+		
+		# Wait for server to be ready
+		print("   Waiting for vLLM to start...", end="", flush=True)
+		max_wait_time = 360  
+		for i in range(max_wait_time):
+			try:
+				response = requests.get(
+					f"http://{self.vllm_host}:{self.vllm_port}/health",
+					timeout=1
+				)
+				if response.status_code == 200:
+					print(" ✅ Ready!")
+					# Extra wait to ensure fully ready
+					time.sleep(2)
+					return True
+			except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+				pass
+			
+			time.sleep(1)
+			if i % 10 == 0 and i > 0:
+				print(f".", end="", flush=True)
+		
+		print(" ❌ Failed to start!")
+		return False
+	
+	def stop_vllm_server(self):
+		"""Stop vLLM server and free GPU memory"""
+		if self.vllm_process is None:
+			print("\n⚠️  No vLLM process to stop")
+			return
+		
+		print("\n🛑 Stopping vLLM server...")
+		
+		try:
+			# Graceful shutdown
+			self.vllm_process.send_signal(signal.SIGTERM)
+			
+			try:
+				self.vllm_process.wait(timeout=15)
+				print("   ✅ vLLM stopped gracefully")
+			except subprocess.TimeoutExpired:
+				print("   ⚠️  Timeout, force killing...")
+				self.vllm_process.kill()
+				self.vllm_process.wait()
+				print("   ✅ vLLM force killed")
+		
+		except Exception as e:
+			print(f"   ⚠️  Error stopping vLLM: {e}")
+		
+		finally:
+			self.vllm_process = None
+			
+			# Extra cleanup - kill any remaining vLLM processes
+			try:
+				subprocess.run(
+					["pkill", "-9", "-f", "vllm.entrypoints"],
+					stderr=subprocess.DEVNULL,
+					timeout=5
+				)
+			except:
+				pass
+			
+			# Wait for GPU memory to be freed
+			print("   Waiting for GPU cleanup...", end="", flush=True)
+			time.sleep(5)
+			torch.cuda.empty_cache()
+			print(" Done")
 
 	def save_checkpoint(self):
 		"""Save full training checkpoint"""
@@ -236,64 +236,64 @@ class PPO_LOOP:
 		latest_path = self.checkpoint_dir / "checkpoint_latest.pt"
 		torch.save(checkpoint, latest_path)
 
-    def _initialize_policy_model(self):
-        """Initialize policy model for training"""
-        print("\n🏋️ Initializing policy model for training...")
-        
-        base_model = AutoModelForCausalLM.from_pretrained(
-            self.config.base_model,
-            torch_dtype=torch.float16,
-            device_map="auto",
-            trust_remote_code=True  # For Qwen models
-        )
-        
-        # Freeze base model
-        for param in base_model.parameters():
-            param.requires_grad = False
-        
-        # Apply LoRA
-        policy_model = get_peft_model(base_model, self.lora_config)
-        
-        # Load existing LoRA weights if available
-        if self.current_lora_path and Path(self.current_lora_path).exists():
-            print(f"   Loading existing LoRA: {self.current_lora_path}")
-            # Load the adapter weights
-            adapter_weights = torch.load(
-                Path(self.current_lora_path) / "adapter_model.bin"
-            )
-            policy_model.load_state_dict(adapter_weights, strict=False)
-        
-        # Initialize optimizer
-        self.optimizer = torch.optim.AdamW(
-            policy_model.parameters(),
-            lr=self.learning_rate
-        )
-        
-        print("   Policy model ready")
-        return policy_model
+	def _initialize_policy_model(self):
+		"""Initialize policy model for training"""
+		print("\n🏋️ Initializing policy model for training...")
+		
+		base_model = AutoModelForCausalLM.from_pretrained(
+			self.config.base_model,
+			torch_dtype=torch.float16,
+			device_map="auto",
+			trust_remote_code=True  # For Qwen models
+		)
+		
+		# Freeze base model
+		for param in base_model.parameters():
+			param.requires_grad = False
+		
+		# Apply LoRA
+		policy_model = get_peft_model(base_model, self.lora_config)
+		
+		# Load existing LoRA weights if available
+		if self.current_lora_path and Path(self.current_lora_path).exists():
+			print(f"   Loading existing LoRA: {self.current_lora_path}")
+			# Load the adapter weights
+			adapter_weights = torch.load(
+				Path(self.current_lora_path) / "adapter_model.bin"
+			)
+			policy_model.load_state_dict(adapter_weights, strict=False)
+		
+		# Initialize optimizer
+		self.optimizer = torch.optim.AdamW(
+			policy_model.parameters(),
+			lr=self.learning_rate
+		)
+		
+		print("   Policy model ready")
+		return policy_model
 
-    def _cleanup_policy_model(self):
-        """Unload policy model and free GPU memory"""
-        print("\n🧹 Cleaning up policy model...")
-        
-        if hasattr(self, 'policy_model') and self.policy_model is not None:
-            del self.policy_model
-            self.policy_model = None
-        
-        if hasattr(self, 'optimizer') and self.optimizer is not None:
-            del self.optimizer
-            self.optimizer = None
-        
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        
-        # Verify GPU memory freed
-        if torch.cuda.is_available():
-            allocated = torch.cuda.memory_allocated() / 1024**3
-            print(f"   GPU Memory Allocated: {allocated:.2f} GB")
-        
-        print("   Policy model unloaded")
+	def _cleanup_policy_model(self):
+		"""Unload policy model and free GPU memory"""
+		print("\n🧹 Cleaning up policy model...")
+		
+		if hasattr(self, 'policy_model') and self.policy_model is not None:
+			del self.policy_model
+			self.policy_model = None
+		
+		if hasattr(self, 'optimizer') and self.optimizer is not None:
+			del self.optimizer
+			self.optimizer = None
+		
+		import gc
+		gc.collect()
+		torch.cuda.empty_cache()
+		
+		# Verify GPU memory freed
+		if torch.cuda.is_available():
+			allocated = torch.cuda.memory_allocated() / 1024**3
+			print(f"   GPU Memory Allocated: {allocated:.2f} GB")
+		
+		print("   Policy model unloaded")
 
 	def load_checkpoint(self, checkpoint_path: str):
 		"""Load training checkpoint to resume"""
@@ -368,19 +368,18 @@ class PPO_LOOP:
 		print(f"📈 Saved training curves to {fig_path}")
 		plt.close()
 
-
 	def collect_rollouts(self) -> List[dict]:
 		from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
-        
-        try:
-            response = requests.get(
-                f"http://{self.vllm_host}:{self.vllm_port}/health",
-                timeout=2
-            )
-            if response.status_code != 200:
-                raise RuntimeError("vLLM server not healthy!")
-        except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"vLLM server not running! {e}")
+		
+		try:
+			response = requests.get(
+				f"http://{self.vllm_host}:{self.vllm_port}/health",
+				timeout=2
+			)
+			if response.status_code != 200:
+				raise RuntimeError("vLLM server not healthy!")
+		except requests.exceptions.RequestException as e:
+			raise RuntimeError(f"vLLM server not running! {e}")
 		
 		task_set = random.sample(self.train_ids, self.random_sample_number)
 		all_rollouts = []
@@ -393,13 +392,13 @@ class PPO_LOOP:
 			for rollout in range(self.K):
 				print(f"\nRollout {rollout}")
 
-                extra_body = {
-                    "return_token_ids": True
-                }
-                
-                # If using LoRA, specify which one
-                if self.current_lora_path:
-                    extra_body["lora_name"] = "ppo_adapter"
+				extra_body = {
+					"return_token_ids": True
+				}
+				
+				# If using LoRA, specify which one
+				if self.current_lora_path:
+					extra_body["lora_name"] = "ppo_adapter"
 
 				agent = SimplifiedReActCodeAgent(
 					model_config={
@@ -703,109 +702,109 @@ class PPO_LOOP:
 			yield [data[j] for j in batch_idx]
 	
 	def train_iteration(self):
-        """Run one full training iteration with sequential model loading"""
-        print(f"\n{'='*80}")
-        print(f"PPO Iteration {self.iteration}")
-        print(f"{'='*80}")
-        
-        # ================================
-        # PHASE 1: ROLLOUTS WITH VLLM
-        # ================================
-        print("\n" + "="*80)
-        print("PHASE 1: Collecting Rollouts with vLLM")
-        print("="*80)
-        
-        # Start vLLM with current LoRA (or base model on iter 0)
-        if not self.start_vllm_server(lora_path=self.current_lora_path):
-            raise RuntimeError("Failed to start vLLM server!")
-        
-        try:
-            # Collect rollouts
-            rollouts, task_set = self.collect_rollouts()
-            updated_rollouts = self.get_advantages(rollouts, task_set)
-        finally:
-            # Always stop vLLM, even if rollouts fail
-            self.stop_vllm_server()
-        
-        # ================================
-        # PHASE 2: TRAINING WITH POLICY MODEL
-        # ================================
-        print("\n" + "="*80)
-        print("PHASE 2: Training Policy Model")
-        print("="*80)
-        
-        # Initialize policy model (now that vLLM is stopped)
-        if self.policy_model is None:
-            self.policy_model = self._initialize_policy_model()
-        
-        # PPO training loop
-        total_epoch_loss = 0
-        for epoch in range(self.n_epochs):
-            epoch_loss = 0
-            num_batches = 0
-            
-            for minibatch in self.shuffled_batchify(updated_rollouts, self.batch_size):
-                self.optimizer.zero_grad()
-                
-                loss = self.compute_ppo_loss(minibatch)
-                
-                if loss.requires_grad:
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.policy_model.parameters(), 1.0)
-                    self.optimizer.step()
-                
-                epoch_loss += loss.item()
-                num_batches += 1
-            
-            avg_epoch_loss = epoch_loss / num_batches if num_batches > 0 else 0
-            total_epoch_loss += avg_epoch_loss
-            print(f"   Epoch {epoch+1}/{self.n_epochs}, Avg Loss: {avg_epoch_loss:.4f}")
-        
-        # ================================
-        # PHASE 3: SAVE AND CLEANUP
-        # ================================
-        print("\n" + "="*80)
-        print("PHASE 3: Saving Checkpoint and Cleaning Up")
-        print("="*80)
-        
-        # Save updated LoRA
-        self.iteration += 1
-        self.current_lora_path = str(self.checkpoint_dir / f"lora_iter_{self.iteration}")
-        self.policy_model.save_pretrained(self.current_lora_path)
-        print(f"💾 Saved LoRA to {self.current_lora_path}")
-        
-        # Compute metrics
-        avg_reward = sum(r.get("overall_success", 0) or 0 for r in updated_rollouts) / len(updated_rollouts)
-        successful_rollouts = sum(1 for r in updated_rollouts if r.get("completed", False))
-        success_rate = (successful_rollouts / len(updated_rollouts)) * 100
-        avg_loss = total_epoch_loss / self.n_epochs if self.n_epochs > 0 else 0
-        
-        # Update training history
-        self.training_history["iterations"].append(self.iteration)
-        self.training_history["avg_rewards"].append(avg_reward)
-        self.training_history["success_rates"].append(success_rate)
-        self.training_history["avg_losses"].append(avg_loss)
-        self.training_history["completed_tasks"].append(successful_rollouts)
-        
-        # Save checkpoint and metrics
-        self.save_checkpoint()
-        self.save_metrics()
-        
-        try:
-            self.plot_training_curves()
-        except Exception as e:
-            print(f"⚠️  Failed to plot training curves: {e}")
-        
-        # Clean up policy model to free GPU memory for next iteration
-        self._cleanup_policy_model()
-        
-        print(f"\n📊 Iteration {self.iteration} Summary:")
-        print(f"   Average Reward: {avg_reward:.4f}")
-        print(f"   Success Rate: {success_rate:.1f}%")
-        print(f"   Average Loss: {avg_loss:.4f}")
-        print(f"   Completed Tasks: {successful_rollouts}/{len(updated_rollouts)}")
-        
-        return updated_rollouts
+		"""Run one full training iteration with sequential model loading"""
+		print(f"\n{'='*80}")
+		print(f"PPO Iteration {self.iteration}")
+		print(f"{'='*80}")
+		
+		# ================================
+		# PHASE 1: ROLLOUTS WITH VLLM
+		# ================================
+		print("\n" + "="*80)
+		print("PHASE 1: Collecting Rollouts with vLLM")
+		print("="*80)
+		
+		# Start vLLM with current LoRA (or base model on iter 0)
+		if not self.start_vllm_server(lora_path=self.current_lora_path):
+			raise RuntimeError("Failed to start vLLM server!")
+		
+		try:
+			# Collect rollouts
+			rollouts, task_set = self.collect_rollouts()
+			updated_rollouts = self.get_advantages(rollouts, task_set)
+		finally:
+			# Always stop vLLM, even if rollouts fail
+			self.stop_vllm_server()
+		
+		# ================================
+		# PHASE 2: TRAINING WITH POLICY MODEL
+		# ================================
+		print("\n" + "="*80)
+		print("PHASE 2: Training Policy Model")
+		print("="*80)
+		
+		# Initialize policy model (now that vLLM is stopped)
+		if self.policy_model is None:
+			self.policy_model = self._initialize_policy_model()
+		
+		# PPO training loop
+		total_epoch_loss = 0
+		for epoch in range(self.n_epochs):
+			epoch_loss = 0
+			num_batches = 0
+			
+			for minibatch in self.shuffled_batchify(updated_rollouts, self.batch_size):
+				self.optimizer.zero_grad()
+				
+				loss = self.compute_ppo_loss(minibatch)
+				
+				if loss.requires_grad:
+					loss.backward()
+					torch.nn.utils.clip_grad_norm_(self.policy_model.parameters(), 1.0)
+					self.optimizer.step()
+				
+				epoch_loss += loss.item()
+				num_batches += 1
+			
+			avg_epoch_loss = epoch_loss / num_batches if num_batches > 0 else 0
+			total_epoch_loss += avg_epoch_loss
+			print(f"   Epoch {epoch+1}/{self.n_epochs}, Avg Loss: {avg_epoch_loss:.4f}")
+		
+		# ================================
+		# PHASE 3: SAVE AND CLEANUP
+		# ================================
+		print("\n" + "="*80)
+		print("PHASE 3: Saving Checkpoint and Cleaning Up")
+		print("="*80)
+		
+		# Save updated LoRA
+		self.iteration += 1
+		self.current_lora_path = str(self.checkpoint_dir / f"lora_iter_{self.iteration}")
+		self.policy_model.save_pretrained(self.current_lora_path)
+		print(f"💾 Saved LoRA to {self.current_lora_path}")
+		
+		# Compute metrics
+		avg_reward = sum(r.get("overall_success", 0) or 0 for r in updated_rollouts) / len(updated_rollouts)
+		successful_rollouts = sum(1 for r in updated_rollouts if r.get("completed", False))
+		success_rate = (successful_rollouts / len(updated_rollouts)) * 100
+		avg_loss = total_epoch_loss / self.n_epochs if self.n_epochs > 0 else 0
+		
+		# Update training history
+		self.training_history["iterations"].append(self.iteration)
+		self.training_history["avg_rewards"].append(avg_reward)
+		self.training_history["success_rates"].append(success_rate)
+		self.training_history["avg_losses"].append(avg_loss)
+		self.training_history["completed_tasks"].append(successful_rollouts)
+		
+		# Save checkpoint and metrics
+		self.save_checkpoint()
+		self.save_metrics()
+		
+		try:
+			self.plot_training_curves()
+		except Exception as e:
+			print(f"⚠️  Failed to plot training curves: {e}")
+		
+		# Clean up policy model to free GPU memory for next iteration
+		self._cleanup_policy_model()
+		
+		print(f"\n📊 Iteration {self.iteration} Summary:")
+		print(f"   Average Reward: {avg_reward:.4f}")
+		print(f"   Success Rate: {success_rate:.1f}%")
+		print(f"   Average Loss: {avg_loss:.4f}")
+		print(f"   Completed Tasks: {successful_rollouts}/{len(updated_rollouts)}")
+		
+		return updated_rollouts
 
 
 def evaluate_lora(lora_path: str, dataset: str = "test_normal", max_tasks: int = None):
@@ -839,79 +838,79 @@ def evaluate_lora(lora_path: str, dataset: str = "test_normal", max_tasks: int =
 
 
 def main():
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="PPO-LOOP Training")
-    parser.add_argument("--resume", type=str, default=None, 
-                       help="Resume from checkpoint path")
-    parser.add_argument("--eval-only", action="store_true",
-                       help="Only evaluate a trained LoRA")
-    parser.add_argument("--lora-path", type=str, default=None,
-                       help="Path to LoRA for evaluation")
-    parser.add_argument("--iterations", type=int, default=10,
-                       help="Number of training iterations")
-    
-    args = parser.parse_args()
-    
-    # Evaluation mode
-    if args.eval_only:
-        if not args.lora_path:
-            print("❌ Must provide --lora-path for evaluation")
-            return
-        evaluate_lora(args.lora_path, dataset="test_normal")
-        return
-    
-    # Training mode
-    config = Config()
-    
-    ppo_loop = PPO_LOOP(
-        K=2,
-        random_sample_number=2,
-        config=config,
-        epsilon=0.2,
-        learning_rate=1e-5,
-        n_epochs=2,
-        batch_size=8,
-        checkpoint_dir="./checkpoints",
-        resume_from=args.resume
-    )
-    
-    start_iter = ppo_loop.iteration
-    num_iterations = args.iterations
-    
-    print(f"\n🚀 Starting PPO-LOOP Training")
-    print(f"   Base Model: {config.base_model}")
-    print(f"   Iterations: {start_iter} → {start_iter + num_iterations}")
-    print(f"   Checkpoint dir: {ppo_loop.checkpoint_dir}")
-    print(f"   vLLM Port: {ppo_loop.vllm_port}")
-    
-    try:
-        for iteration in range(start_iter, start_iter + num_iterations):
-            print(f"\n{'='*80}")
-            print(f"Training Iteration {iteration+1}/{start_iter + num_iterations}")
-            print(f"{'='*80}")
-            
-            rollouts = ppo_loop.train_iteration()
-            
-    except KeyboardInterrupt:
-        print("\n⚠️  Training interrupted by user")
-        print(f"   Last checkpoint saved at iteration {ppo_loop.iteration}")
-    except Exception as e:
-        print(f"\n❌ Training crashed: {e}")
-        print(f"   Last checkpoint saved at iteration {ppo_loop.iteration}")
-        import traceback
-        traceback.print_exc()
-        raise
-    finally:
-        # Cleanup: stop vLLM if still running
-        print("\n🧹 Final cleanup...")
-        ppo_loop.stop_vllm_server()
-        ppo_loop._cleanup_policy_model()
-    
-    print("\n✨ Training complete!")
-    print(f"   Final LoRA: {ppo_loop.current_lora_path}")
-    print(f"   Checkpoints: {ppo_loop.checkpoint_dir}")
+	import argparse
+	
+	parser = argparse.ArgumentParser(description="PPO-LOOP Training")
+	parser.add_argument("--resume", type=str, default=None, 
+					   help="Resume from checkpoint path")
+	parser.add_argument("--eval-only", action="store_true",
+					   help="Only evaluate a trained LoRA")
+	parser.add_argument("--lora-path", type=str, default=None,
+					   help="Path to LoRA for evaluation")
+	parser.add_argument("--iterations", type=int, default=10,
+					   help="Number of training iterations")
+	
+	args = parser.parse_args()
+	
+	# Evaluation mode
+	if args.eval_only:
+		if not args.lora_path:
+			print("❌ Must provide --lora-path for evaluation")
+			return
+		evaluate_lora(args.lora_path, dataset="test_normal")
+		return
+	
+	# Training mode
+	config = Config()
+	
+	ppo_loop = PPO_LOOP(
+		K=2,
+		random_sample_number=2,
+		config=config,
+		epsilon=0.2,
+		learning_rate=1e-5,
+		n_epochs=2,
+		batch_size=8,
+		checkpoint_dir="./checkpoints",
+		resume_from=args.resume
+	)
+	
+	start_iter = ppo_loop.iteration
+	num_iterations = args.iterations
+	
+	print(f"\n🚀 Starting PPO-LOOP Training")
+	print(f"   Base Model: {config.base_model}")
+	print(f"   Iterations: {start_iter} → {start_iter + num_iterations}")
+	print(f"   Checkpoint dir: {ppo_loop.checkpoint_dir}")
+	print(f"   vLLM Port: {ppo_loop.vllm_port}")
+	
+	try:
+		for iteration in range(start_iter, start_iter + num_iterations):
+			print(f"\n{'='*80}")
+			print(f"Training Iteration {iteration+1}/{start_iter + num_iterations}")
+			print(f"{'='*80}")
+			
+			rollouts = ppo_loop.train_iteration()
+			
+	except KeyboardInterrupt:
+		print("\n⚠️  Training interrupted by user")
+		print(f"   Last checkpoint saved at iteration {ppo_loop.iteration}")
+	except Exception as e:
+		print(f"\n❌ Training crashed: {e}")
+		print(f"   Last checkpoint saved at iteration {ppo_loop.iteration}")
+		import traceback
+		traceback.print_exc()
+		raise
+	finally:
+		# Cleanup: stop vLLM if still running
+		print("\n🧹 Final cleanup...")
+		ppo_loop.stop_vllm_server()
+		ppo_loop._cleanup_policy_model()
+	
+	print("\n✨ Training complete!")
+	print(f"   Final LoRA: {ppo_loop.current_lora_path}")
+	print(f"   Checkpoints: {ppo_loop.checkpoint_dir}")
 
 
 if __name__ == "__main__":
-    main()
+	main()

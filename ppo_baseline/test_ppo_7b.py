@@ -8,7 +8,7 @@ os.environ["OPENAI_API_KEY"] = "EMPTY"
 os.environ["NO_API_KEY"] = "EMPTY"
 os.environ["MODEL_SERVER_URL"] = "http://localhost:8000"
 
-from ppo_baseline.main import PPO_LOOP
+from ppo_baseline.main_alt import PPO_LOOP
 from shared.config import Config
 
 # Configure for 7B model
