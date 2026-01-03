@@ -109,63 +109,77 @@ class PPO_LOOP:
 		self.vllm_port = 8000
 		self.vllm_host = "localhost"
 
-	def start_vllm_server(self, lora_path: str = None):
-		"""Start vLLM server with optional LoRA adapter"""
+	def start_vllm_server(self, lora_path: str | None = None) -> bool:
 		print("\n🚀 Starting vLLM server...")
-		
+
 		cmd = [
 			"vllm", "serve", self.config.base_model,
+			"--host", self.vllm_host,                 # important if not localhost
 			"--port", str(self.vllm_port),
 			"--max-model-len", "25192",
 			"--gpu-memory-utilization", "0.45",
 			"--enable-lora",
 			"--max-loras", "2",
-			"--max-lora-rank", "64"
+			"--max-lora-rank", "64",
 		]
-		
-		# Set environment for vLLM
-		env = os.environ.copy()
-		
-		# Add LoRA if specified
+
 		if lora_path:
-			# vLLM can load LoRAs via --lora-modules flag
-			cmd.extend([
-				"--lora-modules", f"ppo_adapter={lora_path}"
-			])
+			cmd += ["--lora-modules", f"ppo_adapter={lora_path}"]
 			print(f"   Loading LoRA: {lora_path}")
 		else:
 			print("   Loading base model (no LoRA)")
-		
-		# Start vLLM process
+
+		env = os.environ.copy()
+
+		# Log to file to avoid PIPE deadlock
+		log_path = getattr(self, "vllm_log_path", "/tmp/vllm_server.log")
+		log_f = open(log_path, "ab", buffering=0)
+
 		self.vllm_process = subprocess.Popen(
 			cmd,
-			stdout=subprocess.PIPE,
-			stderr=subprocess.PIPE,
-			env=env
+			stdout=log_f,
+			stderr=log_f,
+			env=env,
+			start_new_session=True,   # lets you kill the whole process group cleanly
 		)
-		
-		# Wait for server to be ready
+
+		print(f"   PID: {self.vllm_process.pid}")
+		print(f"   Logs: {log_path}")
 		print("   Waiting for vLLM to start...", end="", flush=True)
-		max_wait_time = 360  
+
+		max_wait_time = 360
+		base = f"http://{self.vllm_host}:{self.vllm_port}"
+
 		for i in range(max_wait_time):
+			# If process exited, show logs tail and fail fast
+			rc = self.vllm_process.poll()
+			if rc is not None:
+				print(f"\n ❌ vLLM exited early (return code {rc}).")
+				try:
+					# show last ~200 lines
+					tail = subprocess.check_output(["bash", "-lc", f"tail -n 200 {log_path}"], text=True)
+					print("---- vLLM log tail ----")
+					print(tail)
+					print("-----------------------")
+				except Exception:
+					pass
+				return False
+
 			try:
-				response = requests.get(
-					f"http://{self.vllm_host}:{self.vllm_port}/health",
-					timeout=1
-				)
-				if response.status_code == 200:
+				# /v1/models tends to be a reliable readiness check for vLLM OpenAI server
+				r = requests.get(f"{base}/v1/models", timeout=1)
+				if r.status_code == 200:
 					print(" ✅ Ready!")
-					# Extra wait to ensure fully ready
-					time.sleep(2)
+					time.sleep(1)
 					return True
-			except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+			except requests.RequestException:
 				pass
-			
+
 			time.sleep(1)
 			if i % 10 == 0 and i > 0:
-				print(f".", end="", flush=True)
-		
-		print(" ❌ Failed to start!")
+				print(".", end="", flush=True)
+
+		print("\n ❌ Timed out waiting for vLLM.")
 		return False
 	
 	def stop_vllm_server(self):
