@@ -191,39 +191,74 @@ class PPO_LOOP:
 		print("\n🛑 Stopping vLLM server...")
 		
 		try:
-			# Graceful shutdown
-			self.vllm_process.send_signal(signal.SIGTERM)
+			# Get the PID before killing
+			vllm_pid = self.vllm_process.pid
+			print(f"   vLLM main PID: {vllm_pid}")
 			
+			# Kill the process group (this kills all child processes too)
 			try:
-				self.vllm_process.wait(timeout=15)
-				print("   ✅ vLLM stopped gracefully")
-			except subprocess.TimeoutExpired:
-				print("   ⚠️  Timeout, force killing...")
-				self.vllm_process.kill()
-				self.vllm_process.wait()
-				print("   ✅ vLLM force killed")
-		
+				os.killpg(os.getpgid(vllm_pid), signal.SIGTERM)
+				print("   Sent SIGTERM to process group")
+			except ProcessLookupError:
+				print("   Process already dead")
+			
+			# Wait a bit
+			time.sleep(3)
+			
+			# Force kill if still alive
+			try:
+				os.killpg(os.getpgid(vllm_pid), signal.SIGKILL)
+				print("   Sent SIGKILL to process group")
+			except ProcessLookupError:
+				pass
+			
 		except Exception as e:
 			print(f"   ⚠️  Error stopping vLLM: {e}")
 		
 		finally:
 			self.vllm_process = None
 			
-			# Extra cleanup - kill any remaining vLLM processes
+			# Nuclear option: kill ALL vLLM and Ray processes
+			print("   Cleaning up vLLM/Ray processes...")
+			subprocess.run(["pkill", "-9", "-f", "vllm"], stderr=subprocess.DEVNULL)
+			subprocess.run(["pkill", "-9", "-f", "ray::"], stderr=subprocess.DEVNULL)
+			subprocess.run(["pkill", "-9", "-f", "_raylet"], stderr=subprocess.DEVNULL)
+			
+			# Also kill Ray completely
 			try:
-				subprocess.run(
-					["pkill", "-9", "-f", "vllm.entrypoints"],
-					stderr=subprocess.DEVNULL,
-					timeout=5
-				)
+				import ray
+				if ray.is_initialized():
+					ray.shutdown()
 			except:
 				pass
 			
-			# Wait for GPU memory to be freed
+			# Force Ray shutdown via CLI
+			subprocess.run(["ray", "stop", "--force"], 
+						  stderr=subprocess.DEVNULL, 
+						  stdout=subprocess.DEVNULL)
+			
+			# Close log files if they exist
+			if hasattr(self, 'vllm_stdout_file'):
+				self.vllm_stdout_file.close()
+			if hasattr(self, 'vllm_stderr_file'):
+				self.vllm_stderr_file.close()
+			
+			# Wait for GPU memory to actually be freed
 			print("   Waiting for GPU cleanup...", end="", flush=True)
-			time.sleep(5)
+			time.sleep(10)  # Increased from 5 to 10 seconds
+			
+			# Force CUDA cache clear
 			torch.cuda.empty_cache()
-			print(" Done")
+			
+			# Verify memory is freed
+			if torch.cuda.is_available():
+				torch.cuda.synchronize()
+				allocated = torch.cuda.memory_allocated() / 1024**3
+				reserved = torch.cuda.memory_reserved() / 1024**3
+				print(f" Done")
+				print(f"   GPU Memory: {allocated:.2f} GB allocated, {reserved:.2f} GB reserved")
+			else:
+				print(" Done")
 
 	def save_checkpoint(self):
 		"""Save full training checkpoint"""
