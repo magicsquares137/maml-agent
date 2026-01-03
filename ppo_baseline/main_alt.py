@@ -854,7 +854,10 @@ def evaluate_lora(lora_path: str, dataset: str = "test_normal", max_tasks: int =
 
 def main():
 	import argparse
-	
+	# Set environment variables
+	os.environ["OPENAI_API_KEY"] = "EMPTY"
+	os.environ["NO_API_KEY"] = "EMPTY"
+	os.environ["MODEL_SERVER_URL"] = "http://localhost:8000"
 	parser = argparse.ArgumentParser(description="PPO-LOOP Training")
 	parser.add_argument("--resume", type=str, default=None, 
 					   help="Resume from checkpoint path")
