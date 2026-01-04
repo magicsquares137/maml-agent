@@ -17,6 +17,7 @@ import time
 import signal
 import os 
 import requests
+import time
 
 
 class PPO_LOOP:
@@ -775,6 +776,7 @@ class PPO_LOOP:
 		finally:
 			# Always stop vLLM, even if rollouts fail
 			self.stop_vllm_server()
+			time.sleep(60)
 		
 		# ================================
 		# PHASE 2: TRAINING WITH POLICY MODEL
@@ -923,7 +925,7 @@ def main():
 		epsilon=0.2,
 		learning_rate=1e-5,
 		n_epochs=2,
-		batch_size=8,
+		batch_size=2,
 		checkpoint_dir="./checkpoints",
 		resume_from=args.resume
 	)
