@@ -900,8 +900,7 @@ class PPO_LOOP:
 		print("="*80)
 		
 		# Initialize policy model (now that vLLM is stopped)
-		if self.policy_model is None:
-			self.policy_model = self._initialize_policy_model()
+		self.policy_model = self._initialize_policy_model()
 		
 		# PPO training loop
 		total_epoch_loss = 0
