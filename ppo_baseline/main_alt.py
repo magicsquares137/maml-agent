@@ -297,6 +297,7 @@ class PPO_LOOP:
 			device_map="auto",
 			trust_remote_code=True  # For Qwen models
 		)
+		base_model.gradient_checkpointing_enable()
 		
 		# Freeze base model
 		for param in base_model.parameters():
