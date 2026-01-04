@@ -296,7 +296,7 @@ class PPO_LOOP:
 			self.config.base_model,
 			torch_dtype=torch.bfloat16,
 			device_map="auto",
-			trust_remote_code=True  # For Qwen models
+			trust_remote_code=True
 		)
 		base_model.gradient_checkpointing_enable()
 		
@@ -304,17 +304,24 @@ class PPO_LOOP:
 		for param in base_model.parameters():
 			param.requires_grad = False
 		
-		# Apply LoRA
-		policy_model = get_peft_model(base_model, self.lora_config)
-		
-		# Load existing LoRA weights if available
+		# Check if we should load existing LoRA or create fresh one
 		if self.current_lora_path and Path(self.current_lora_path).exists():
-			print(f"   Loading existing LoRA: {self.current_lora_path}")
-			# Load the adapter weights
-			adapter_weights = torch.load(
-				Path(self.current_lora_path) / "adapter_model.bin"
-			)
-			policy_model.load_state_dict(adapter_weights, strict=False)
+			print(f"   Loading existing LoRA from: {self.current_lora_path}")
+			try:
+				# Use PEFT's proper loading method
+				policy_model = PeftModel.from_pretrained(
+					base_model,
+					self.current_lora_path,
+					is_trainable=True  # Important: make it trainable
+				)
+				print(f"   ✅ Loaded existing LoRA")
+			except Exception as e:
+				print(f"   ⚠️  Failed to load LoRA: {e}")
+				print(f"   Creating fresh LoRA instead")
+				policy_model = get_peft_model(base_model, self.lora_config)
+		else:
+			print("   Creating fresh LoRA")
+			policy_model = get_peft_model(base_model, self.lora_config)
 		
 		# Initialize optimizer
 		self.optimizer = torch.optim.AdamW(
@@ -322,7 +329,7 @@ class PPO_LOOP:
 			lr=self.learning_rate
 		)
 		
-		print("   Policy model ready")
+		print("   ✅ Policy model ready")
 		return policy_model
 
 	def _cleanup_policy_model(self):
