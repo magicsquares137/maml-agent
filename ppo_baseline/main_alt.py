@@ -293,7 +293,7 @@ class PPO_LOOP:
 		
 		base_model = AutoModelForCausalLM.from_pretrained(
 			self.config.base_model,
-			torch_dtype=torch.float16,
+			torch_dtype=torch.bfloat16,
 			device_map="auto",
 			trust_remote_code=True  # For Qwen models
 		)
