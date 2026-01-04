@@ -102,7 +102,12 @@ class PPO_LOOP:
 		self.lora_config = LoraConfig(
 			r=16,
 			lora_alpha=32,
-			target_modules=["q_proj", "v_proj", "k_proj", "o_proj"],
+		    target_modules=[
+		        # Self-attention modules <- per paper
+		        "q_proj", "k_proj", "v_proj", "o_proj",
+		        # MLP modules
+		        "gate_proj", "up_proj", "down_proj"
+		    ],
 			lora_dropout=0.05,
 			bias="none",
 			task_type="CAUSAL_LM"
@@ -150,7 +155,7 @@ class PPO_LOOP:
 		print(f"   Logs: {log_path}")
 		print("   Waiting for vLLM to start...", end="", flush=True)
 
-		max_wait_time = 360
+		max_wait_time = 600
 		base = f"http://{self.vllm_host}:{self.vllm_port}"
 
 		for i in range(max_wait_time):
@@ -889,7 +894,9 @@ class PPO_LOOP:
 		
 		# Start vLLM with current LoRA (or base model on iter 0)
 		if not self.start_vllm_server(lora_path=self.current_lora_path):
-			raise RuntimeError("Failed to start vLLM server!")
+			# Retry
+			if not self.start_vllm_server(lora_path=self.current_lora_path):
+				raise RuntimeError("Failed to start vLLM server!")
 		
 		try:
 			# Collect rollouts
@@ -1040,13 +1047,13 @@ def main():
 	config = Config()
 	
 	ppo_loop = PPO_LOOP(
-		K=2,
-		random_sample_number=2,
+		K=6,
+		random_sample_number=40,
 		config=config,
 		epsilon=0.2,
-		learning_rate=1e-5,
-		n_epochs=2,
-		batch_size=2,
+		learning_rate=5e-5,
+		n_epochs=3,
+		batch_size=3,
 		checkpoint_dir="./checkpoints",
 		resume_from=args.resume
 	)
