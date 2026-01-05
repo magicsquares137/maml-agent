@@ -102,12 +102,12 @@ class PPO_LOOP:
 		self.lora_config = LoraConfig(
 			r=16,
 			lora_alpha=32,
-		    target_modules=[
-		        # Self-attention modules <- per paper
-		        "q_proj", "k_proj", "v_proj", "o_proj",
-		        # MLP modules
-		        "gate_proj", "up_proj", "down_proj"
-		    ],
+			target_modules=[
+				# Self-attention modules <- per paper
+				"q_proj", "k_proj", "v_proj", "o_proj",
+				# MLP modules
+				"gate_proj", "up_proj", "down_proj"
+			],
 			lora_dropout=0.05,
 			bias="none",
 			task_type="CAUSAL_LM"
@@ -155,7 +155,7 @@ class PPO_LOOP:
 		print(f"   Logs: {log_path}")
 		print("   Waiting for vLLM to start...", end="", flush=True)
 
-		max_wait_time = 600
+		max_wait_time = 3600
 		base = f"http://{self.vllm_host}:{self.vllm_port}"
 
 		for i in range(max_wait_time):
@@ -893,19 +893,28 @@ class PPO_LOOP:
 		print("="*80)
 		
 		# Start vLLM with current LoRA (or base model on iter 0)
-		if not self.start_vllm_server(lora_path=self.current_lora_path):
-			# Retry
-			if not self.start_vllm_server(lora_path=self.current_lora_path):
-				raise RuntimeError("Failed to start vLLM server!")
+		max_retries = 3
+		for attempt in range(max_retries):
+			if attempt > 0:
+				print(f"\n🔄 Retry {attempt}/{max_retries-1}...")
+			
+			if self.start_vllm_server(lora_path=self.current_lora_path):
+				break  # Success!
+			
+			if attempt < max_retries - 1:
+				print(f"   Waiting 30s before retry...")
+				time.sleep(30)
+		else:
+			raise RuntimeError(f"Failed to start vLLM after {max_retries} attempts")
 		
 		try:
-			# Collect rollouts
 			rollouts, task_set = self.collect_rollouts()
 			updated_rollouts = self.get_advantages(rollouts, task_set)
 		finally:
-			# Always stop vLLM, even if rollouts fail
 			self.stop_vllm_server()
-			time.sleep(60)
+			# Reduced sleep - 60s is too long
+			print("   Waiting 10s for cleanup...")
+			time.sleep(10)
 		
 		# ================================
 		# PHASE 2: TRAINING WITH POLICY MODEL
