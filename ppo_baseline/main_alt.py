@@ -124,7 +124,7 @@ class PPO_LOOP:
 			"vllm", "serve", self.config.base_model,
 			"--host", self.vllm_host,                 # important if not localhost
 			"--port", str(self.vllm_port),
-			"--max-model-len", "25192",
+			"--max-model-len", "30000",
 			"--gpu-memory-utilization", "0.45",
 			"--enable-lora",
 			"--max-loras", "2",
