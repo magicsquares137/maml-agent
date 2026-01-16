@@ -1,0 +1,29 @@
+# 1. Train specialists
+python train_specialist.py --difficulty 1 --iterations 5
+python train_specialist.py --difficulty 2 --iterations 5
+python train_specialist.py --difficulty 3 --iterations 5
+
+# 2. Compose memories
+python compose_memories.py \
+    --memories \
+        ./checkpoints/specialist_d1/memory_iter_5.txt \
+        ./checkpoints/specialist_d2/memory_iter_5.txt \
+        ./checkpoints/specialist_d3/memory_iter_5.txt \
+    --output ./composed_memory_iter5.txt
+
+# 3. Merge LoRAs with base
+python merge_lora_to_base.py --lora ./checkpoints/specialist_d1/lora_iter_5 --output ./models/specialist_d1_iter5
+python merge_lora_to_base.py --lora ./checkpoints/specialist_d2/lora_iter_5 --output ./models/specialist_d2_iter5
+python merge_lora_to_base.py --lora ./checkpoints/specialist_d3/lora_iter_5 --output ./models/specialist_d3_iter5
+
+# 4. Merge specialists (try multiple strategies)
+python merge_specialists.py --models ./models/specialist_d1_iter5 ./models/specialist_d2_iter5 ./models/specialist_d3_iter5 --method ties --density 0.5 --output ./models/merged_ties_0.5_iter5
+python merge_specialists.py --models ./models/specialist_d1_iter5 ./models/specialist_d2_iter5 ./models/specialist_d3_iter5 --method ties --density 0.7 --output ./models/merged_ties_0.7_iter5
+python merge_specialists.py --models ./models/specialist_d1_iter5 ./models/specialist_d2_iter5 ./models/specialist_d3_iter5 --method dare_ties --density 0.9 --output ./models/merged_dare_0.9_iter5
+
+# 5. Evaluate everything
+python evaluate_model.py --model Qwen/Qwen2.5-Coder-7B-Instruct --dataset test_normal  # baseline
+python evaluate_model.py --model ./models/merged_ties_0.5_iter5 --dataset test_normal  # without memory
+python evaluate_model.py --model ./models/merged_ties_0.5_iter5 --memory ./composed_memory_iter5.txt --dataset test_normal  # with memory
+python evaluate_model.py --model ./models/merged_ties_0.7_iter5 --memory ./composed_memory_iter5.txt --dataset test_normal
+python evaluate_model.py --model ./models/merged_dare_0.9_iter5 --memory ./composed_memory_iter5.txt --dataset test_normal
