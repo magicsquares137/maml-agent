@@ -1088,7 +1088,8 @@ def main():
 					   help="Number of training iterations")
 	parser.add_argument("--difficulties", type=int, nargs="+", default=[1, 2],
 					   help="Task difficulty levels to train on (1, 2, and/or 3)")
-	
+	parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints",  # ADD THIS
+					   help="Directory to save checkpoints")
 	
 	args = parser.parse_args()
 	
@@ -1112,6 +1113,7 @@ def main():
 		learning_rate=5e-5,
 		n_epochs=3,
 		batch_size=3,
+		checkpoint_dir=args.checkpoint_dir,
 		checkpoint_dir="./checkpoints",
 		resume_from=args.resume
 	)
