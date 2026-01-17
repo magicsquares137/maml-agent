@@ -467,9 +467,8 @@ class PPO_LOOP:
 
 	def _create_prompt_with_memory(self) -> str:
 		"""
-		Create temporary prompt file with memory template prepended
+		Create temporary prompt file with memory template inserted right before task details
 		"""
-		# NOTE: may want to add this somewhere like first message instead? or inject before final job instructions?
 		original_prompt_path = "/workspace/appworld/appworld/experiments/prompts/react_code_agent/instructions.txt"
 		
 		# If no memory yet (iteration 0), use original
@@ -481,15 +480,27 @@ class PPO_LOOP:
 		with open(original_prompt_path, 'r') as f:
 			original_prompt = f.read()
 		
-		# Prepend memory template
-		modified_prompt = f"""### BEST PRACTICES (learned from previous iterations):
-
+		# Insert right before "My name is:" which is just before the task
+		marker = "My name is:"
+		if marker in original_prompt:
+			before_marker, after_marker = original_prompt.split(marker, 1)
+			
+			modified_prompt = f"""{before_marker}
+	**Key Patterns (learned from training)**:
 	{self.H}
 
-	### END BEST PRACTICES
 	---
 
-	{original_prompt}
+	{marker}{after_marker}"""
+		else:
+			# Fallback: just append before the end
+			modified_prompt = f"""{original_prompt}
+
+	---
+	**Key Patterns**:
+	{self.H}
+
+	---
 	"""
 		
 		# Write to temp file
@@ -686,6 +697,10 @@ class PPO_LOOP:
 		"""
 		Generate best practices template by feeding all conversation history to Claude
 		"""
+		if not self.anthropic_client:
+			print("   ⚠️  No Anthropic client - skipping memory update")
+			return self.H
+		
 		print("\n📝 Generating best practices template from rollouts...")
 		
 		# Build the input for Claude
@@ -698,25 +713,31 @@ class PPO_LOOP:
 
 	{conversations_text}
 
-	Previous best practices template from iteration {self.iteration - 1}:
+	Previous best practices from iteration {self.iteration - 1}:
 	{self.H if self.H else "[None - this is the first iteration]"}
 
-	Your task: Create a concise best practices template (max 600 words) that will be injected into the agent's system prompt to improve future performance.
+	Your task: Create a CONCISE checklist (max 150 words, 5-7 bullet points) of the most impactful patterns.
 
-	Focus on:
-	1. Common failure patterns and how to avoid them (authentication, loops, giving up early, etc.)
-	2. Successful strategies that worked
-	3. Task-specific guidance (e.g., "for shopping tasks, always X before Y")
+	Format as short bullets:
+	- [Pattern]: [One sentence]
 
-	Write the template in a clear, actionable format that the agent can follow.
+	Focus on HIGH-IMPACT patterns that directly prevent failures or improve success rate.
+	Examples:
+	- Authentication: Check login requirements before accessing user-specific data
+	- Loop avoidance: If action fails 2x, try different approach
+	- Persistence: Attempt 8+ actions before giving up
 
-	Best Practices Template:
+	Checklist:
 	"""
 		
-		new_H = self._call_claude_api(prompt)
-		
-		print(f"   ✅ Generated template ({len(new_H)} characters)")
-		return new_H
+		try:
+			new_H = self._call_claude_api(prompt)
+			print(f"   ✅ Generated template ({len(new_H)} characters)")
+			return new_H
+		except Exception as e:
+			print(f"   ❌ Failed to generate template: {e}")
+			print(f"   Keeping previous template")
+			return self.H
 
 	def _format_rollouts_for_llm(self, rollouts: List[dict]) -> str:
 		"""
@@ -772,7 +793,7 @@ class PPO_LOOP:
 		
 		try:
 			message = client.messages.create(
-				model="claude-sonnet-4-5",
+				model="claude-sonnet-4-5-20250929",
 				max_tokens=2000,
 				temperature=0.7,
 				messages=[
