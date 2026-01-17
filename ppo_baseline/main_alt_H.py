@@ -1114,7 +1114,6 @@ def main():
 		n_epochs=3,
 		batch_size=3,
 		checkpoint_dir=args.checkpoint_dir,
-		checkpoint_dir="./checkpoints",
 		resume_from=args.resume
 	)
 	
