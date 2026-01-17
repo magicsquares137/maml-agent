@@ -20,6 +20,7 @@ import requests
 import time
 import json
 import matplotlib.pyplot as plt
+import anthropic
 
 
 class PPO_LOOP:
@@ -36,7 +37,8 @@ class PPO_LOOP:
 		n_epochs: int = 3,
 		batch_size: int = 8,
 		checkpoint_dir: str = "./checkpoints",
-		resume_from: str = None
+		resume_from: str = None,
+		anthropic_api_key: str = None
 	) -> None:
 
 		# Set up storage and stats dir
@@ -52,11 +54,19 @@ class PPO_LOOP:
 			"completed_tasks": []
 		}
 
+		api_key = anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY")
+		if not api_key:
+			print("⚠️  Warning: No ANTHROPIC_API_KEY found. Memory updates will fail.")
+			self.anthropic_client = None
+		else:
+			self.anthropic_client = anthropic.Anthropic(api_key=api_key)
+			print(f"✅ Anthropic client initialized")
+
 		# initialize prompt injection template as empty
-	    self.H = ""
-	    
-	    # Track memory evolution
-	    self.memory_history = []
+		self.H = ""
+		
+		# Track memory evolution
+		self.memory_history = []
 
 		# Start with None - first rollouts use base model
 		self.current_lora_path = None
@@ -378,22 +388,22 @@ class PPO_LOOP:
 		self.iteration = checkpoint["iteration"]
 		self.current_lora_path = checkpoint["current_lora_path"]
 		self.training_history = checkpoint["training_history"]
-	    self.H = checkpoint.get("H", "")  # Load memory template
-	    self.memory_history = checkpoint.get("memory_history", [])
+		self.H = checkpoint.get("H", "")  # Load memory template
+		self.memory_history = checkpoint.get("memory_history", [])
 		
 		print(f"✅ Resumed from iteration {self.iteration}")
 		print(f"   Current LoRA: {self.current_lora_path}")
 
 	def _save_memory_snapshot(self):
-	    """Save current memory template"""
-	    memory_path = self.checkpoint_dir / f"memory_iter_{self.iteration}.txt"
-	    with open(memory_path, 'w') as f:
-	        f.write(f"# Memory Template - Iteration {self.iteration}\n")
-	        f.write(f"# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-	        f.write("="*80 + "\n\n")
-	        f.write(self.H)
-	    
-	    print(f"   💾 Saved memory to {memory_path}")
+		"""Save current memory template"""
+		memory_path = self.checkpoint_dir / f"memory_iter_{self.iteration}.txt"
+		with open(memory_path, 'w') as f:
+			f.write(f"# Memory Template - Iteration {self.iteration}\n")
+			f.write(f"# Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+			f.write("="*80 + "\n\n")
+			f.write(self.H)
+		
+		print(f"   💾 Saved memory to {memory_path}")
 
 	def save_metrics(self):
 		"""Save training metrics to JSON"""
@@ -456,23 +466,23 @@ class PPO_LOOP:
 		plt.close()
 
 	def _create_prompt_with_memory(self) -> str:
-	    """
-	    Create temporary prompt file with memory template prepended
-	    """
-	    # NOTE: may want to add this somewhere like first message instead? or inject before final job instructions?
-	    original_prompt_path = "/workspace/appworld/appworld/experiments/prompts/react_code_agent/instructions.txt"
-	    
-	    # If no memory yet (iteration 0), use original
-	    if not self.H or len(self.H.strip()) == 0:
-	        print("   Using original prompt (no memory yet)")
-	        return original_prompt_path
-	    
-	    # Read original prompt
-	    with open(original_prompt_path, 'r') as f:
-	        original_prompt = f.read()
-	    
-	    # Prepend memory template
-	    modified_prompt = f"""### BEST PRACTICES (learned from previous iterations):
+		"""
+		Create temporary prompt file with memory template prepended
+		"""
+		# NOTE: may want to add this somewhere like first message instead? or inject before final job instructions?
+		original_prompt_path = "/workspace/appworld/appworld/experiments/prompts/react_code_agent/instructions.txt"
+		
+		# If no memory yet (iteration 0), use original
+		if not self.H or len(self.H.strip()) == 0:
+			print("   Using original prompt (no memory yet)")
+			return original_prompt_path
+		
+		# Read original prompt
+		with open(original_prompt_path, 'r') as f:
+			original_prompt = f.read()
+		
+		# Prepend memory template
+		modified_prompt = f"""### BEST PRACTICES (learned from previous iterations):
 
 	{self.H}
 
@@ -481,14 +491,14 @@ class PPO_LOOP:
 
 	{original_prompt}
 	"""
-	    
-	    # Write to temp file
-	    temp_path = self.checkpoint_dir / f"prompt_with_memory_iter_{self.iteration}.txt"
-	    with open(temp_path, 'w') as f:
-	        f.write(modified_prompt)
-	    
-	    print(f"   Using modified prompt with memory ({len(self.H)} chars)")
-	    return str(temp_path)
+		
+		# Write to temp file
+		temp_path = self.checkpoint_dir / f"prompt_with_memory_iter_{self.iteration}.txt"
+		with open(temp_path, 'w') as f:
+			f.write(modified_prompt)
+		
+		print(f"   Using modified prompt with memory ({len(self.H)} chars)")
+		return str(temp_path)
 
 	def collect_rollouts(self) -> List[dict]:
 		from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
@@ -506,8 +516,8 @@ class PPO_LOOP:
 		task_set = random.sample(self.train_ids, self.random_sample_number)
 		all_rollouts = []
 
-	    # Create prompt with memory injected
-	    temp_prompt_path = self._create_prompt_with_memory()
+		# Create prompt with memory injected
+		temp_prompt_path = self._create_prompt_with_memory()
 		
 		for index, task_id in enumerate(tqdm(task_set, desc=f"Running rollouts")):
 			print(f"\n{'='*60}")
@@ -673,16 +683,16 @@ class PPO_LOOP:
 		return updated_rollouts
 
 	def _update_memory_template(self, rollouts: List[dict]) -> str:
-	    """
-	    Generate best practices template by feeding all conversation history to Claude
-	    """
-	    print("\n📝 Generating best practices template from rollouts...")
-	    
-	    # Build the input for Claude
-	    conversations_text = self._format_rollouts_for_llm(rollouts)
-	    
-	    # Call Claude to synthesize best practices
-	    prompt = f"""You are analyzing conversation logs from an AI agent attempting to solve AppWorld tasks.
+		"""
+		Generate best practices template by feeding all conversation history to Claude
+		"""
+		print("\n📝 Generating best practices template from rollouts...")
+		
+		# Build the input for Claude
+		conversations_text = self._format_rollouts_for_llm(rollouts)
+		
+		# Call Claude to synthesize best practices
+		prompt = f"""You are analyzing conversation logs from an AI agent attempting to solve AppWorld tasks.
 
 	Here are {len(rollouts)} task execution logs from iteration {self.iteration}:
 
@@ -702,82 +712,82 @@ class PPO_LOOP:
 
 	Best Practices Template:
 	"""
-	    
-	    new_H = self._call_claude_api(prompt)
-	    
-	    print(f"   ✅ Generated template ({len(new_H)} characters)")
-	    return new_H
+		
+		new_H = self._call_claude_api(prompt)
+		
+		print(f"   ✅ Generated template ({len(new_H)} characters)")
+		return new_H
 
 	def _format_rollouts_for_llm(self, rollouts: List[dict]) -> str:
-	    """
-	    Format rollout conversations into text for LLM analysis
-	    """
-	    formatted = []
-	    
-	    # Take all rollouts (or sample if too many)
-	    sample_size = min(len(rollouts), 40)  # Claude can handle this
-	    sampled = rollouts[:sample_size]
-	    
-	    for i, rollout in enumerate(sampled):
-	        agent_state = rollout.get("agent_state")
-	        if not agent_state:
-	            continue
-	        
-	        # Header for this rollout
-	        success = "SUCCESS" if rollout.get("completed", False) else "FAILED"
-	        task_id = rollout.get("task_id", "unknown")
-	        steps = rollout.get("iterations", 0)
-	        score = rollout.get("overall_success", 0)
-	        
-	        rollout_text = [
-	            f"\n{'='*60}",
-	            f"Rollout {i+1}/{sample_size}: {success}",
-	            f"Task: {task_id}",
-	            f"Steps: {steps}",
-	            f"Score: {score:.2f}",
-	            f"{'='*60}\n"
-	        ]
-	        
-	        # Add conversation history
-	        for msg in agent_state.conversation_history:
-	            # Format: "ROLE: content"
-	            rollout_text.append(f"{msg.role.upper()}: {msg.content}\n")
-	        
-	        formatted.append("\n".join(rollout_text))
-	    
-	    return "\n\n".join(formatted)
+		"""
+		Format rollout conversations into text for LLM analysis
+		"""
+		formatted = []
+		
+		# Take all rollouts (or sample if too many)
+		sample_size = min(len(rollouts), 40)  # Claude can handle this
+		sampled = rollouts[:sample_size]
+		
+		for i, rollout in enumerate(sampled):
+			agent_state = rollout.get("agent_state")
+			if not agent_state:
+				continue
+			
+			# Header for this rollout
+			success = "SUCCESS" if rollout.get("completed", False) else "FAILED"
+			task_id = rollout.get("task_id", "unknown")
+			steps = rollout.get("iterations", 0)
+			score = rollout.get("overall_success", 0)
+			
+			rollout_text = [
+				f"\n{'='*60}",
+				f"Rollout {i+1}/{sample_size}: {success}",
+				f"Task: {task_id}",
+				f"Steps: {steps}",
+				f"Score: {score:.2f}",
+				f"{'='*60}\n"
+			]
+			
+			# Add conversation history
+			for msg in agent_state.conversation_history:
+				# Format: "ROLE: content"
+				rollout_text.append(f"{msg.role.upper()}: {msg.content}\n")
+			
+			formatted.append("\n".join(rollout_text))
+		
+		return "\n\n".join(formatted)
 
 	def _call_claude_api(self, prompt: str) -> str:
-	    """
-	    Call Claude API to generate the memory template
-	    """
-	    import anthropic
-	    
-	    # Get API key from environment
-	    api_key = os.environ.get("ANTHROPIC_API_KEY")
-	    if not api_key:
-	        raise ValueError("ANTHROPIC_API_KEY not set in environment")
-	    
-	    client = anthropic.Anthropic(api_key=api_key)
-	    
-	    try:
-	        message = client.messages.create(
-	            model="claude-sonnet-4-5",
-	            max_tokens=2000,
-	            temperature=0.7,
-	            messages=[
-	                {"role": "user", "content": prompt}
-	            ]
-	        )
-	        
-	        # Extract text from response
-	        new_H = message.content[0].text.strip()
-	        return new_H
-	        
-	    except Exception as e:
-	        print(f"   ⚠️  Claude API call failed: {e}")
-	        print(f"   Keeping previous template")
-	        return self.H 	
+		"""
+		Call Claude API to generate the memory template
+		"""
+		import anthropic
+		
+		# Get API key from environment
+		api_key = os.environ.get("ANTHROPIC_API_KEY")
+		if not api_key:
+			raise ValueError("ANTHROPIC_API_KEY not set in environment")
+		
+		client = anthropic.Anthropic(api_key=api_key)
+		
+		try:
+			message = client.messages.create(
+				model="claude-sonnet-4-5",
+				max_tokens=2000,
+				temperature=0.7,
+				messages=[
+					{"role": "user", "content": prompt}
+				]
+			)
+			
+			# Extract text from response
+			new_H = message.content[0].text.strip()
+			return new_H
+			
+		except Exception as e:
+			print(f"   ⚠️  Claude API call failed: {e}")
+			print(f"   Keeping previous template")
+			return self.H 	
 
 	def compute_log_probs(self, episode: dict) -> dict:
 		"""
@@ -931,19 +941,19 @@ class PPO_LOOP:
 			rollouts, task_set = self.collect_rollouts()
 			updated_rollouts = self.get_advantages(rollouts, task_set)
 
-	        print("\n" + "="*80)
-	        print("Updating Memory Template")
-	        print("="*80)
-	        
-	        self.H = self._update_memory_template(updated_rollouts)
-	        
-	        # Save memory snapshot
-	        self.memory_history.append({
-	            'iteration': self.iteration,
-	            'H': self.H,
-	            'timestamp': time.time()
-	        })
-	        self._save_memory_snapshot()
+			print("\n" + "="*80)
+			print("Updating Memory Template")
+			print("="*80)
+			
+			self.H = self._update_memory_template(updated_rollouts)
+			
+			# Save memory snapshot
+			self.memory_history.append({
+				'iteration': self.iteration,
+				'H': self.H,
+				'timestamp': time.time()
+			})
+			self._save_memory_snapshot()
 
 		finally:
 			self.stop_vllm_server()
@@ -1074,8 +1084,11 @@ def main():
 					   help="Only evaluate a trained LoRA")
 	parser.add_argument("--lora-path", type=str, default=None,
 					   help="Path to LoRA for evaluation")
-	parser.add_argument("--iterations", type=int, default=10,
+	parser.add_argument("--iterations", type=int, default=5,
 					   help="Number of training iterations")
+	parser.add_argument("--difficulties", type=int, nargs="+", default=[1, 2],
+					   help="Task difficulty levels to train on (1, 2, and/or 3)")
+	
 	
 	args = parser.parse_args()
 	
@@ -1093,6 +1106,7 @@ def main():
 	ppo_loop = PPO_LOOP(
 		K=6,
 		random_sample_number=40,
+		difficulties=args.difficulties,
 		config=config,
 		epsilon=0.2,
 		learning_rate=5e-5,
@@ -1108,6 +1122,7 @@ def main():
 	print(f"\n🚀 Starting PPO-LOOP Training")
 	print(f"   Base Model: {config.base_model}")
 	print(f"   Iterations: {start_iter} → {start_iter + num_iterations}")
+	print(f"   Difficulties: {args.difficulties}") 
 	print(f"   Checkpoint dir: {ppo_loop.checkpoint_dir}")
 	print(f"   vLLM Port: {ppo_loop.vllm_port}")
 	
