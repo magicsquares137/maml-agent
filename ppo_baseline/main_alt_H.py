@@ -21,7 +21,12 @@ import time
 import json
 import matplotlib.pyplot as plt
 import anthropic
+from pathlib import Path
+from dotenv import load_dotenv
+import os
+from dotenv import load_dotenv, find_dotenv
 
+load_dotenv(find_dotenv())
 
 class PPO_LOOP:
 	def __init__(
@@ -54,7 +59,7 @@ class PPO_LOOP:
 			"completed_tasks": []
 		}
 
-		api_key = anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY")
+		api_key = anthropic_api_key or os.environ["ANTHROPIC_API_KEY"]
 		if not api_key:
 			print("⚠️  Warning: No ANTHROPIC_API_KEY found. Memory updates will fail.")
 			self.anthropic_client = None
@@ -737,7 +742,8 @@ class PPO_LOOP:
 		except Exception as e:
 			print(f"   ❌ Failed to generate template: {e}")
 			print(f"   Keeping previous template")
-			return self.H
+			#return self.H
+			raise Exception(f"Unable to call Claude: {e}")
 
 	def _format_rollouts_for_llm(self, rollouts: List[dict]) -> str:
 		"""
