@@ -63,6 +63,7 @@ class PPO_LOOP:
 		if not api_key:
 			print("⚠️  Warning: No ANTHROPIC_API_KEY found. Memory updates will fail.")
 			self.anthropic_client = None
+			raise Exception(f"Claude key not set")
 		else:
 			self.anthropic_client = anthropic.Anthropic(api_key=api_key)
 			print(f"✅ Anthropic client initialized")
