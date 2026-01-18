@@ -59,14 +59,10 @@ class PPO_LOOP:
 			"completed_tasks": []
 		}
 
-		api_key = anthropic_api_key or os.environ["ANTHROPIC_API_KEY"]
-		if not api_key:
-			print("⚠️  Warning: No ANTHROPIC_API_KEY found. Memory updates will fail.")
-			self.anthropic_client = None
-			raise Exception(f"Claude key not set")
-		else:
-			self.anthropic_client = anthropic.Anthropic(api_key=api_key)
-			print(f"✅ Anthropic client initialized")
+		api_key = os.getenv("ANTHROPIC_API_KEY")
+
+		self.anthropic_client = anthropic.Anthropic(api_key=api_key)
+		print(f"✅ Anthropic client initialized")
 
 		# initialize prompt injection template as empty
 		self.H = ""
@@ -815,7 +811,7 @@ class PPO_LOOP:
 		except Exception as e:
 			print(f"   ⚠️  Claude API call failed: {e}")
 			print(f"   Keeping previous template")
-			return self.H 	
+			raise ValueError(f"Claude not called: {e}") 	
 
 	def compute_log_probs(self, episode: dict) -> dict:
 		"""
