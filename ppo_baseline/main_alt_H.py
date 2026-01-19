@@ -1143,30 +1143,19 @@ def main():
 	# Training mode
 	config = Config()
 	
-	# ppo_loop = PPO_LOOP(
-	# 	K=6,
-	# 	random_sample_number=40,
-	# 	difficulties=args.difficulties,
-	# 	config=config,
-	# 	epsilon=0.2,
-	# 	learning_rate=5e-5,
-	# 	n_epochs=3,
-	# 	batch_size=3,
-	# 	checkpoint_dir=args.checkpoint_dir,
-	# 	resume_from=args.resume
-	# )
 	ppo_loop = PPO_LOOP(
-		K=2,
-		random_sample_number=2,
+		K=6,
+		random_sample_number=40,
 		difficulties=args.difficulties,
 		config=config,
 		epsilon=0.2,
 		learning_rate=5e-5,
 		n_epochs=3,
-		batch_size=2,
+		batch_size=3,
 		checkpoint_dir=args.checkpoint_dir,
 		resume_from=args.resume
-	)	
+	)
+
 	start_iter = ppo_loop.iteration
 	num_iterations = args.iterations
 	
