@@ -743,43 +743,58 @@ class PPO_LOOP:
 			raise Exception(f"Unable to call Claude: {e}")
 
 	def _format_rollouts_for_llm(self, rollouts: List[dict]) -> str:
-		"""
-		Format rollout conversations into text for LLM analysis
-		"""
-		formatted = []
-		
-		# Take all rollouts (or sample if too many)
-		sample_size = min(len(rollouts), 40)  # Claude can handle this
-		sampled = rollouts[:sample_size]
-		
-		for i, rollout in enumerate(sampled):
-			agent_state = rollout.get("agent_state")
-			if not agent_state:
-				continue
-			
-			# Header for this rollout
-			success = "SUCCESS" if rollout.get("completed", False) else "FAILED"
-			task_id = rollout.get("task_id", "unknown")
-			steps = rollout.get("iterations", 0)
-			score = rollout.get("overall_success", 0)
-			
-			rollout_text = [
-				f"\n{'='*60}",
-				f"Rollout {i+1}/{sample_size}: {success}",
-				f"Task: {task_id}",
-				f"Steps: {steps}",
-				f"Score: {score:.2f}",
-				f"{'='*60}\n"
-			]
-			
-			# Add conversation history
-			for msg in agent_state.conversation_history:
-				# Format: "ROLE: content"
-				rollout_text.append(f"{msg.role.upper()}: {msg.content}\n")
-			
-			formatted.append("\n".join(rollout_text))
-		
-		return "\n\n".join(formatted)
+	    """
+	    Format rollout conversations into text for LLM analysis
+	    Sample strategically to stay under token limits
+	    """
+	    formatted = []
+	    
+	    # Separate successes and failures
+	    successful = [r for r in rollouts if r.get("completed", False)]
+	    failed = [r for r in rollouts if not r.get("completed", False)]
+	    
+	    # Sample: 5 successes + 10 failures (failures are more informative)
+	    sampled_success = successful[:2] if len(successful) > 2 else successful
+	    sampled_failed = failed[:6] if len(failed) > 6 else failed
+	    
+	    sampled = sampled_success + sampled_failed
+	    
+	    print(f"   Sampling {len(sampled)} rollouts ({len(sampled_success)} success, {len(sampled_failed)} failed)")
+	    
+	    for i, rollout in enumerate(sampled):
+	        agent_state = rollout.get("agent_state")
+	        if not agent_state:
+	            continue
+	        
+	        # Header for this rollout
+	        success = "SUCCESS" if rollout.get("completed", False) else "FAILED"
+	        task_id = rollout.get("task_id", "unknown")
+	        steps = rollout.get("iterations", 0)
+	        score = rollout.get("overall_success", 0)
+	        
+	        rollout_text = [
+	            f"\n{'='*60}",
+	            f"Rollout {i+1}/{len(sampled)}: {success}",
+	            f"Task: {task_id}",
+	            f"Steps: {steps}",
+	            f"Score: {score:.2f}",
+	            f"{'='*60}\n"
+	        ]
+	        
+	        # TRUNCATE conversation to first 10 messages only (most important part)
+	        conversation = agent_state.conversation_history[:10]
+	        
+	        for msg in conversation:
+	            # Also truncate individual messages to 300 chars
+	            content = msg.content[:300] if len(msg.content) > 300 else msg.content
+	            rollout_text.append(f"{msg.role.upper()}: {content}\n")
+	        
+	        if len(agent_state.conversation_history) > 10:
+	            rollout_text.append(f"... [{len(agent_state.conversation_history) - 10} more messages truncated]\n")
+	        
+	        formatted.append("\n".join(rollout_text))
+	    
+	    return "\n\n".join(formatted)
 
 	def _call_claude_api(self, prompt: str) -> str:
 		"""
@@ -1112,7 +1127,7 @@ def main():
 					   help="Number of training iterations")
 	parser.add_argument("--difficulties", type=int, nargs="+", default=[1, 2],
 					   help="Task difficulty levels to train on (1, 2, and/or 3)")
-	parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints",  # ADD THIS
+	parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints",  
 					   help="Directory to save checkpoints")
 	
 	args = parser.parse_args()
@@ -1128,19 +1143,30 @@ def main():
 	# Training mode
 	config = Config()
 	
+	# ppo_loop = PPO_LOOP(
+	# 	K=6,
+	# 	random_sample_number=40,
+	# 	difficulties=args.difficulties,
+	# 	config=config,
+	# 	epsilon=0.2,
+	# 	learning_rate=5e-5,
+	# 	n_epochs=3,
+	# 	batch_size=3,
+	# 	checkpoint_dir=args.checkpoint_dir,
+	# 	resume_from=args.resume
+	# )
 	ppo_loop = PPO_LOOP(
-		K=6,
-		random_sample_number=40,
+		K=2,
+		random_sample_number=2,
 		difficulties=args.difficulties,
 		config=config,
 		epsilon=0.2,
 		learning_rate=5e-5,
 		n_epochs=3,
-		batch_size=3,
+		batch_size=2,
 		checkpoint_dir=args.checkpoint_dir,
 		resume_from=args.resume
-	)
-	
+	)	
 	start_iter = ppo_loop.iteration
 	num_iterations = args.iterations
 	
