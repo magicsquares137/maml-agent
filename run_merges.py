@@ -23,7 +23,7 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 # =============================================================================
 
 HF_ORG = "arkitekt-ai"
-CONFIG_DIR = Path("mergekit_configs")
+CONFIG_DIR = Path("merge_configs")
 OUTPUT_BASE = Path("merged_models")
 BASE_NAME = "qwen-coder-7b-specialists"
 
