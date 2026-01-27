@@ -1,0 +1,9 @@
+models:
+  - model: arkitekt-ai/qwen-coder-7b-specialist-d1
+  - model: arkitekt-ai/qwen-coder-7b-specialist-d2
+
+merge_method: slerp
+base_model: arkitekt-ai/qwen-coder-7b-specialist-d1
+parameters:
+  t: 0.5  # Interpolation factor (0.5 = midpoint)
+dtype: bfloat16

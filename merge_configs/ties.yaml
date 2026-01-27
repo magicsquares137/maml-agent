@@ -1,0 +1,17 @@
+models:
+  - model: Qwen/Qwen2.5-Coder-7B-Instruct
+    # Base model - no parameters needed
+  - model: arkitekt-ai/qwen-coder-7b-specialist-d1
+    parameters:
+      density: 0.5  # Keep top 50% of significant changes
+      weight: 0.5
+  - model: arkitekt-ai/qwen-coder-7b-specialist-d2
+    parameters:
+      density: 0.5
+      weight: 0.5
+
+merge_method: ties
+base_model: Qwen/Qwen2.5-Coder-7B-Instruct
+parameters:
+  normalize: true  # Normalize weights internally
+dtype: bfloat16

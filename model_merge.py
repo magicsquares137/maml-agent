@@ -8,12 +8,15 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 from huggingface_hub import login
 import os
+from dotenv import load_dotenv
+import os
 
+load_dotenv() 
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
 
-HF_TOKEN = "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"  
+HF_TOKEN = os.getenv("HF_TOKEN")  
 HF_ORG = "arkitekt-ai"
 BASE_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"
 

@@ -1,0 +1,18 @@
+models:
+  - model: Qwen/Qwen2.5-Coder-7B-Instruct
+    # Base model - no parameters needed
+  - model: arkitekt-ai/qwen-coder-7b-specialist-d1
+    parameters:
+      density: 0.5  # Keep 50% of parameters (drop 50%)
+      weight: 0.5
+  - model: arkitekt-ai/qwen-coder-7b-specialist-d2
+    parameters:
+      density: 0.5
+      weight: 0.5
+
+merge_method: dare_ties
+base_model: Qwen/Qwen2.5-Coder-7B-Instruct
+parameters:
+  int8_mask: true  # More memory efficient
+  normalize: true
+dtype: bfloat16

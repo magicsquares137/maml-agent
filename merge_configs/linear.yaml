@@ -1,0 +1,10 @@
+models:
+  - model: arkitekt-ai/qwen-coder-7b-specialist-d1
+    parameters:
+      weight: 0.5
+  - model: arkitekt-ai/qwen-coder-7b-specialist-d2
+    parameters:
+      weight: 0.5
+
+merge_method: linear
+dtype: bfloat16
