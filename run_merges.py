@@ -55,11 +55,11 @@ def setup():
     print("🔧 Installing mergekit...")
     subprocess.run(["pip", "install", "-q", "mergekit"], check=True)
     
-    print("🔐 Logging in to HuggingFace...")
-    subprocess.run(
-        ["huggingface-cli", "login", "--token", HF_TOKEN],
-        check=True
-    )
+    # print("🔐 Logging in to HuggingFace...")
+    # subprocess.run(
+    #     ["huggingface-cli", "login", "--token", HF_TOKEN],
+    #     check=True
+    # )
     
     OUTPUT_BASE.mkdir(exist_ok=True)
 
@@ -105,14 +105,16 @@ def run_merge(method: str, push: bool = True):
     if push:
         print(f"\n🚀 Pushing to HuggingFace: {hf_repo}")
         try:
-            subprocess.run([
-                "huggingface-cli", "upload",
-                hf_repo,
-                str(output_dir),
-                "--commit-message", f"Merged with mergekit using {method} method"
-            ], check=True)
+            from huggingface_hub import HfApi
+            api = HfApi(token=HF_TOKEN)
+            api.create_repo(hf_repo, exist_ok=True)
+            api.upload_folder(
+                folder_path=str(output_dir),
+                repo_id=hf_repo,
+                commit_message=f"Merged with mergekit using {method} method"
+            )
             print(f"✅ Pushed to https://huggingface.co/{hf_repo}")
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             print(f"❌ Push failed: {e}")
             return False
     
