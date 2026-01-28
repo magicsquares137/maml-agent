@@ -887,58 +887,146 @@ class PPO_LOOP:
 		episode["token_level_data"] = all_token_data
 		return episode
 
+	# def compute_ppo_loss(self, minibatch):
+	# 	"""
+	# 	Compute PPO loss for a minibatch of episodes.
+	# 	Recomputes forward passes with gradients for the actual loss.
+	# 	"""
+	# 	total_loss = torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
+	# 	num_tokens = 0
+		
+	# 	for episode in minibatch:
+	# 		if episode.get("agent_state") is None or episode.get("error") is not None:
+	# 			continue
+			
+	# 		# Get precomputed log probs (no gradients)
+	# 		episode = self.compute_log_probs(episode)  
+	# 		token_data = episode.get("token_level_data", [])
+			
+	# 		if len(token_data) == 0:
+	# 			continue
+			
+	# 		advantage = torch.tensor(episode["advantage"], device=self.policy_model.device)
+			
+	# 		# Process tokens in smaller chunks to save memory
+	# 		for token_info in token_data:
+	# 			new_logprob = torch.tensor(
+	# 				token_info['new_logprob'], 
+	# 				device=self.policy_model.device,
+	# 				requires_grad=False  # This is just data
+	# 			)
+	# 			old_logprob = torch.tensor(
+	# 				token_info['old_logprob'],
+	# 				device=self.policy_model.device,
+	# 				requires_grad=False
+	# 			)
+				
+	# 			# Importance ratio
+	# 			log_ratio = new_logprob - old_logprob
+	# 			ratio = torch.exp(log_ratio)
+				
+	# 			# PPO clipping
+	# 			clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
+				
+	# 			surrogate1 = ratio * advantage
+	# 			surrogate2 = clipped_ratio * advantage
+				
+	# 			token_loss = -torch.min(surrogate1, surrogate2)
+	# 			total_loss = total_loss + token_loss
+	# 			num_tokens += 1
+		
+	# 	if num_tokens == 0:
+	# 		return torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
+		
+	# 	return total_loss / num_tokens
+
+
 	def compute_ppo_loss(self, minibatch):
-		"""
-		Compute PPO loss for a minibatch of episodes.
-		Recomputes forward passes with gradients for the actual loss.
-		"""
-		total_loss = torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
-		num_tokens = 0
-		
-		for episode in minibatch:
-			if episode.get("agent_state") is None or episode.get("error") is not None:
-				continue
-			
-			# Get precomputed log probs (no gradients)
-			episode = self.compute_log_probs(episode)  
-			token_data = episode.get("token_level_data", [])
-			
-			if len(token_data) == 0:
-				continue
-			
-			advantage = torch.tensor(episode["advantage"], device=self.policy_model.device)
-			
-			# Process tokens in smaller chunks to save memory
-			for token_info in token_data:
-				new_logprob = torch.tensor(
-					token_info['new_logprob'], 
-					device=self.policy_model.device,
-					requires_grad=False  # This is just data
-				)
-				old_logprob = torch.tensor(
-					token_info['old_logprob'],
-					device=self.policy_model.device,
-					requires_grad=False
-				)
-				
-				# Importance ratio
-				log_ratio = new_logprob - old_logprob
-				ratio = torch.exp(log_ratio)
-				
-				# PPO clipping
-				clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
-				
-				surrogate1 = ratio * advantage
-				surrogate2 = clipped_ratio * advantage
-				
-				token_loss = -torch.min(surrogate1, surrogate2)
-				total_loss = total_loss + token_loss
-				num_tokens += 1
-		
-		if num_tokens == 0:
-			return torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
-		
-		return total_loss / num_tokens
+	    """
+	    Compute PPO loss WITH gradients flowing to model.
+	    """
+	    total_loss = torch.tensor(0.0, device=self.policy_model.device)
+	    num_tokens = 0
+	    
+	    for episode in minibatch:
+	        if episode.get("agent_state") is None or episode.get("error") is not None:
+	            continue
+	        
+	        agent_state = episode["agent_state"]
+	        advantage = episode["advantage"]
+	        
+	        if advantage == 0:
+	            continue
+	        
+	        advantage_tensor = torch.tensor(
+	            advantage, 
+	            device=self.policy_model.device,
+	            dtype=torch.float32
+	        )
+	        
+	        # Process each assistant message
+	        for msg in agent_state.conversation_history:
+	            if msg.role != "assistant":
+	                continue
+	            
+	            if msg.log_probs is None or msg.tokenized_input is None:
+	                continue
+	            
+	            prompt_token_ids = msg.tokenized_input
+	            output_token_data = msg.log_probs  # [(token_str, old_logprob, token_id), ...]
+	            output_token_ids = [token_id for _, _, token_id in output_token_data]
+	            
+	            if len(output_token_ids) == 0:
+	                continue
+	            
+	            # Build full sequence
+	            full_token_ids = prompt_token_ids + output_token_ids
+	            full_ids = torch.tensor([full_token_ids], device=self.policy_model.device)
+	            
+	            # Forward pass WITH gradients
+	            outputs = self.policy_model(full_ids)
+	            logits = outputs.logits[0]  # [seq_len, vocab_size]
+	            log_probs = torch.log_softmax(logits, dim=-1)
+	            
+	            prompt_length = len(prompt_token_ids)
+	            
+	            # Compute loss for each generated token
+	            for j, (token_str, old_logprob, token_id) in enumerate(output_token_data):
+	                position = prompt_length + j - 1  # Position that predicts this token
+	                
+	                if position < 0 or position >= log_probs.shape[0]:
+	                    continue
+	                
+	                # NEW log prob - WITH gradient connection
+	                new_logprob = log_probs[position, token_id]
+	                
+	                # OLD log prob - from rollout (no grad needed)
+	                old_logprob_tensor = torch.tensor(
+	                    old_logprob,
+	                    device=self.policy_model.device,
+	                    dtype=torch.float32
+	                )
+	                
+	                # PPO objective
+	                log_ratio = new_logprob - old_logprob_tensor
+	                ratio = torch.exp(log_ratio)
+	                
+	                clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
+	                
+	                surrogate1 = ratio * advantage_tensor
+	                surrogate2 = clipped_ratio * advantage_tensor
+	                
+	                token_loss = -torch.min(surrogate1, surrogate2)
+	                total_loss = total_loss + token_loss
+	                num_tokens += 1
+	            
+	            # Clean up to save memory
+	            del outputs, logits, log_probs
+	    
+	    if num_tokens == 0:
+	        return torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
+	    
+	    return total_loss / num_tokens
 
 	def shuffled_batchify(self, data, batch_size):
 		indices = list(range(len(data)))
