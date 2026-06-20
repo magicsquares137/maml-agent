@@ -675,6 +675,23 @@ class PPO_LOOP:
 							  total=len(units), desc=f"Rollouts (x{workers})"):
 					all_rollouts.append(r)
 
+		# Visibility: how many rollouts have usable data vs errored (the worker
+		# otherwise swallows per-rollout exceptions into the result dict).
+		n_ok = sum(1 for r in all_rollouts if r.get("agent_state") is not None)
+		n_err = sum(1 for r in all_rollouts if r.get("error"))
+		n_logprobs = sum(
+			1 for r in all_rollouts
+			if r.get("agent_state") is not None
+			and any(m.role == "assistant" and m.log_probs for m in r["agent_state"].conversation_history)
+		)
+		print(f"   rollout summary: {len(all_rollouts)} total | {n_ok} with agent_state | "
+			  f"{n_logprobs} with logprobs | {n_err} errored")
+		if n_err:
+			for r in all_rollouts:
+				if r.get("error"):
+					print(f"   sample rollout error: {str(r['error'])[:400]}")
+					break
+
 		return all_rollouts, task_set
 
 	def convert_to_agent_state(self, appworld_agent) -> AgentState:
