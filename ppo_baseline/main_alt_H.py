@@ -1,6 +1,18 @@
-import torch
-from peft import LoraConfig, get_peft_model, PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+import os
+from dotenv import load_dotenv, find_dotenv
+# IMPORTANT: load .env and set APPWORLD_ROOT BEFORE importing appworld below.
+# appworld resolves APPWORLD_ROOT at import time and defaults it to the current
+# working directory if unset, so loading the .env afterwards is too late.
+load_dotenv(find_dotenv())
+_appworld_root = os.getenv("APPWORLD_ROOT")
+if _appworld_root:
+    os.environ["APPWORLD_ROOT"] = _appworld_root
+
+# NOTE: This is the ORCHESTRATOR process. It must NEVER import torch /
+# transformers / peft — appworld's native stack and torch crash (segfault in GC)
+# when co-resident in one process. The PPO weight update runs in a separate
+# process via ppo_baseline/train_step.py (invoked with the vllm_env python).
+import sys
 import random
 import uuid
 from appworld import AppWorld, load_task_ids
@@ -8,25 +20,114 @@ from shared.config import Config
 from shared.agent import ReactAgent
 from shared.models import AgentState, Message
 from typing import Dict, Optional, List, Union, Dict
-from appworld import AppWorld, load_task_ids
 from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
 from pathlib import Path
 from tqdm import tqdm
 import subprocess
 import time
 import signal
-import os 
 import requests
-import time
 import json
-import matplotlib.pyplot as plt
-import anthropic
-from pathlib import Path
-from dotenv import load_dotenv
-import os
-from dotenv import load_dotenv, find_dotenv
+import pickle
+# matplotlib and anthropic are imported lazily where used so the appworld env
+# doesn't need them installed (plotting / --use-memory are optional).
 
-load_dotenv(find_dotenv())
+def _convert_to_agent_state(appworld_agent):
+	"""Module-level (picklable) twin of PPO_LOOP.convert_to_agent_state, used by
+	the rollout worker so it can run inside a multiprocessing pool."""
+	agent_state = AgentState(max_iters=appworld_agent.max_steps)
+	for msg in appworld_agent.messages:
+		if msg["role"] == "assistant" and msg.get("logprobs"):
+			agent_state.conversation_history.append(Message(
+				role=msg["role"], content=msg["content"],
+				log_probs=msg["logprobs"], tokenized_input=msg.get("prompt_token_ids")))
+		elif msg["role"] == "user":
+			agent_state.conversation_history.append(Message(role=msg["role"], content=msg["content"]))
+	agent_state.iteration = appworld_agent.step_number
+	return agent_state
+
+
+def _rollout_worker(unit: dict) -> dict:
+	"""Run ONE (task, rollout) unit, fully isolated. Module-level so it is
+	picklable for multiprocessing. Uses a UNIQUE experiment_name so concurrent
+	rollouts of the same task get separate AppWorld DBs (no collision). Returns
+	the exact same result-dict shape as the original sequential loop.
+
+	NOTE: only the experiment_name (where the DB/logs are written) differs from
+	the old inline loop — the agent config, sampling, seed, and outcome are
+	identical, so a rollout's result is unchanged by parallelization.
+	"""
+	import os
+	import uuid as _uuid
+	from appworld import AppWorld
+	from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
+
+	os.environ.setdefault("OPENAI_API_KEY", "EMPTY")
+	os.environ.setdefault("NO_API_KEY", "EMPTY")
+	# The agent's fill_model_server_url() always reads MODEL_SERVER_URL even when
+	# base_url has no template (ours doesn't), so it just needs to exist. Set it
+	# here so the worker is self-sufficient (spawned workers / non-main entry).
+	os.environ.setdefault("MODEL_SERVER_URL", unit["vllm_url"])
+
+	expname = unit["experiment_name"]
+	agent = SimplifiedReActCodeAgent(
+		model_config={
+			"client_name": "openai",
+			"api_type": "chat_completions",
+			"base_url": unit["vllm_url"],
+			"name": unit["model_name"],
+			"api_key_env_name": "NO_API_KEY",
+			"temperature": unit["temperature"],
+			"seed": unit["seed"],
+			"logprobs": True,
+			"top_logprobs": 1,
+			"extra_body": {"return_token_ids": True},
+			"max_completion_tokens": unit["max_tokens"],
+			"cost_per_token": {
+				"input_cache_hit": 0.0, "input_cache_miss": 0.0,
+				"input_cache_write": 0.0, "output": 0.0,
+			},
+			"retry_after_n_seconds": 15,
+			"use_cache": False,
+			"max_retries": 100,
+		},
+		logger_config={"color": False, "verbose": False},
+		appworld_config={"random_seed": 100},
+		prompt_file_path=unit["prompt_path"],
+		ignore_multiple_calls=True,
+		max_prompt_length=None,
+		max_output_length=None,
+		max_steps=unit["train_max_iters"],
+	)
+
+	result = {
+		"task_id": unit["task_id"], "completed": False, "iterations": 0,
+		"error": None, "conversation_length": 0, "overall_success": None,
+		"uuid": _uuid.uuid4(), "agent_state": None, "evaluation_details": None,
+	}
+	try:
+		agent.logger.initialize(expname, 1, 1, 0)
+		# Unique experiment_name -> isolated DB for this rollout.
+		with AppWorld.initializer(update_defaults=True, experiment_name=expname, random_seed=100):
+			agent.solve_task(unit["task_id"])
+			evaluation = agent.world.evaluate().to_dict()
+		completed = evaluation["success"]
+		overall_success = len(evaluation["passes"]) / evaluation["num_tests"]
+		agent_state = _convert_to_agent_state(agent)
+		agent_state.done = completed
+		result.update(
+			completed=completed, iterations=agent.step_number,
+			conversation_length=len(agent_state.conversation_history),
+			overall_success=overall_success, evaluation_details=evaluation,
+			agent_state=agent_state,
+		)
+	except Exception as e:
+		result["error"] = str(e)
+		result["agent_state"] = None
+	finally:
+		del agent
+	return result
+
 
 class PPO_LOOP:
 	def __init__(
@@ -43,7 +144,31 @@ class PPO_LOOP:
 		batch_size: int = 8,
 		checkpoint_dir: str = "./checkpoints",
 		resume_from: str = None,
-		anthropic_api_key: str = None
+		anthropic_api_key: str = None,
+		# --- rollout sampling (LOOP needs DIVERSE trajectories per task) ---
+		rollout_temperature: float = 1.0,   # paper: temperature 1.0
+		rollout_seed_base: int = 1000,
+		train_max_iters: int = 40,          # paper: <=40 interactions during training
+		rollout_workers: int = 1,           # 1 = sequential; >1 = parallel processes
+
+		# --- vLLM serving (rollout phase) ---
+		vllm_tensor_parallel: int = 2,
+		vllm_gpu_mem_util: float = 0.90,
+		vllm_max_model_len: int = 20000,
+		vllm_max_num_seqs: int = 8,   # rollouts are sequential; small batch fits 16GB
+		vllm_quantization: str = None,
+		# --- training phase (runs in a separate process: train_step.py) ---
+		load_in_4bit: bool = False,
+		lora_r: int = 16,
+		lora_alpha: int = 32,
+		lora_dropout: float = 0.05,
+		lora_target_modules: str = "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
+		trainer_python: str = None,   # python that has torch/transformers/peft (vllm_env)
+		vllm_bin: str = None,         # path to the `vllm` CLI (vllm_env/bin/vllm)
+		# --- portability ---
+		prompt_file_path: str = None,
+		# --- prompt-memory (H) feature: requires Anthropic API; off = pure RL ---
+		use_memory: bool = False,
 	) -> None:
 
 		# Set up storage and stats dir
@@ -59,10 +184,16 @@ class PPO_LOOP:
 			"completed_tasks": []
 		}
 
-		api_key = os.getenv("ANTHROPIC_API_KEY")
-
-		self.anthropic_client = anthropic.Anthropic(api_key=api_key)
-		print(f"✅ Anthropic client initialized")
+		self.use_memory = use_memory
+		if self.use_memory:
+			api_key = os.getenv("ANTHROPIC_API_KEY")
+			if not api_key:
+				raise ValueError("--use-memory requires ANTHROPIC_API_KEY to be set")
+			self.anthropic_client = anthropic.Anthropic(api_key=api_key)
+			print(f"✅ Anthropic client initialized (prompt-memory ON)")
+		else:
+			self.anthropic_client = None
+			print("ℹ️  Prompt-memory (H) disabled — pure RL run")
 
 		# initialize prompt injection template as empty
 		self.H = ""
@@ -117,38 +248,72 @@ class PPO_LOOP:
 		self.batch_size = batch_size
 		self.iteration = 0  # Track current iteration
 		
-		# Initialize LoRA config (but don't apply it yet)
-		self.lora_config = LoraConfig(
-			r=16,
-			lora_alpha=32,
-			target_modules=[
-				# Self-attention modules <- per paper
-				"q_proj", "k_proj", "v_proj", "o_proj",
-				# MLP modules
-				"gate_proj", "up_proj", "down_proj"
-			],
-			lora_dropout=0.05,
-			bias="none",
-			task_type="CAUSAL_LM"
+		# LoRA hyperparameters (passed to the trainer subprocess; the peft
+		# LoraConfig itself is built in train_step.py, which owns torch/peft).
+		self.lora_r = lora_r
+		self.lora_alpha = lora_alpha
+		self.lora_dropout = lora_dropout
+		self.lora_target_modules = lora_target_modules
+
+		# Trainer subprocess config: which python has torch/transformers/peft,
+		# and where the vllm CLI lives (orchestrator may run in a torch-free env).
+		self.trainer_python = (
+			trainer_python
+			or os.getenv("TRAINER_PYTHON")
+			or "/home/smcclendon/Documents/github/maml-agent/vllm_env/bin/python"
+		)
+		self.vllm_bin = (
+			vllm_bin
+			or os.getenv("VLLM_BIN")
+			or "/home/smcclendon/Documents/github/maml-agent/vllm_env/bin/vllm"
 		)
 
 		self.vllm_process = None
 		self.vllm_port = 8000
 		self.vllm_host = "localhost"
 
+		# Rollout sampling config (diverse trajectories -> nonzero LOOP advantage)
+		self.rollout_temperature = rollout_temperature
+		self.rollout_seed_base = rollout_seed_base
+		self.train_max_iters = train_max_iters
+		self.rollout_workers = rollout_workers
+
+		# vLLM serving config
+		self.vllm_tensor_parallel = vllm_tensor_parallel
+		self.vllm_gpu_mem_util = vllm_gpu_mem_util
+		self.vllm_max_model_len = vllm_max_model_len
+		self.vllm_max_num_seqs = vllm_max_num_seqs
+		self.vllm_quantization = vllm_quantization
+
+		# Training config
+		self.load_in_4bit = load_in_4bit
+
+		# Prompt file: default to local appworld prompt, overridable via env/arg
+		self.prompt_file_path = (
+			prompt_file_path
+			or os.getenv("APPWORLD_PROMPT_FILE")
+			or "/home/smcclendon/Documents/github/appworld/appworld-rl/experiments/prompts/react_code_agent/instructions.txt"
+		)
+
 	def start_vllm_server(self, lora_path: str | None = None) -> bool:
 		print("\n🚀 Starting vLLM server...")
 
 		cmd = [
-			"vllm", "serve", self.config.base_model,
+			self.vllm_bin, "serve", self.config.base_model,
 			"--host", self.vllm_host,                 # important if not localhost
 			"--port", str(self.vllm_port),
-			"--max-model-len", "30000",
-			"--gpu-memory-utilization", "0.45",
+			"--max-model-len", str(self.vllm_max_model_len),
+			"--gpu-memory-utilization", str(self.vllm_gpu_mem_util),
+			"--tensor-parallel-size", str(self.vllm_tensor_parallel),
+			"--max-num-seqs", str(self.vllm_max_num_seqs),
 			"--enable-lora",
 			"--max-loras", "2",
 			"--max-lora-rank", "64",
 		]
+
+		if self.vllm_quantization:
+			cmd += ["--quantization", self.vllm_quantization]
+			print(f"   Quantization: {self.vllm_quantization}")
 
 		if lora_path:
 			cmd += ["--lora-modules", f"ppo_adapter={lora_path}"]
@@ -270,32 +435,21 @@ class PPO_LOOP:
 			if hasattr(self, 'vllm_stderr_file'):
 				self.vllm_stderr_file.close()
 			
-			# Wait for GPU memory to actually be freed
+			# Wait for GPU memory to actually be freed (the vLLM process group is
+			# killed above; GPU memory is released by the OS as it exits).
 			print("   Waiting for GPU cleanup...", end="", flush=True)
-			time.sleep(10)  # Increased from 5 to 10 seconds
-			
-			# Force CUDA cache clear
-			torch.cuda.empty_cache()
-			
-			# Verify memory is freed
-			if torch.cuda.is_available():
-				torch.cuda.synchronize()
-				allocated = torch.cuda.memory_allocated() / 1024**3
-				reserved = torch.cuda.memory_reserved() / 1024**3
-				print(f" Done")
-				print(f"   GPU Memory: {allocated:.2f} GB allocated, {reserved:.2f} GB reserved")
-			else:
-				print(" Done")
+			time.sleep(10)
+			print(" Done")
 
 	def save_checkpoint(self):
-		"""Save full training checkpoint"""
-		checkpoint_path = self.checkpoint_dir / f"checkpoint_iter_{self.iteration}.pt"
-		
+		"""Save orchestrator checkpoint (no torch state here; optimizer state
+		lives next to the LoRA at <current_lora_path>/optimizer.pt)."""
+		checkpoint_path = self.checkpoint_dir / f"checkpoint_iter_{self.iteration}.pkl"
+
 		checkpoint = {
 			"iteration": self.iteration,
 			"current_lora_path": self.current_lora_path,
 			"training_history": self.training_history,
-			"optimizer_state": self.optimizer.state_dict() if self.optimizer else None,
 			"H": self.H,
 			"config": {
 				"K": self.K,
@@ -306,87 +460,22 @@ class PPO_LOOP:
 				"batch_size": self.batch_size
 			}
 		}
-		
-		torch.save(checkpoint, checkpoint_path)
+
+		with open(checkpoint_path, "wb") as f:
+			pickle.dump(checkpoint, f)
 		print(f"💾 Saved checkpoint to {checkpoint_path}")
-		
+
 		# Also save a "latest" checkpoint
-		latest_path = self.checkpoint_dir / "checkpoint_latest.pt"
-		torch.save(checkpoint, latest_path)
-
-	def _initialize_policy_model(self):
-		"""Initialize policy model for training"""
-		print("\n🏋️ Initializing policy model for training...")
-		
-		base_model = AutoModelForCausalLM.from_pretrained(
-			self.config.base_model,
-			torch_dtype=torch.bfloat16,
-			device_map="auto",
-			trust_remote_code=True
-		)
-		base_model.gradient_checkpointing_enable()
-		
-		# Freeze base model
-		for param in base_model.parameters():
-			param.requires_grad = False
-		
-		# Check if we should load existing LoRA or create fresh one
-		if self.current_lora_path and Path(self.current_lora_path).exists():
-			print(f"   Loading existing LoRA from: {self.current_lora_path}")
-			try:
-				# Use PEFT's proper loading method
-				policy_model = PeftModel.from_pretrained(
-					base_model,
-					self.current_lora_path,
-					is_trainable=True  # Important: make it trainable
-				)
-				print(f"   ✅ Loaded existing LoRA")
-			except Exception as e:
-				print(f"   ⚠️  Failed to load LoRA: {e}")
-				print(f"   Creating fresh LoRA instead")
-				policy_model = get_peft_model(base_model, self.lora_config)
-		else:
-			print("   Creating fresh LoRA")
-			policy_model = get_peft_model(base_model, self.lora_config)
-		
-		# Initialize optimizer
-		self.optimizer = torch.optim.AdamW(
-			policy_model.parameters(),
-			lr=self.learning_rate
-		)
-		
-		print("   ✅ Policy model ready")
-		return policy_model
-
-	def _cleanup_policy_model(self):
-		"""Unload policy model and free GPU memory"""
-		print("\n🧹 Cleaning up policy model...")
-		
-		if hasattr(self, 'policy_model') and self.policy_model is not None:
-			del self.policy_model
-			self.policy_model = None
-		
-		if hasattr(self, 'optimizer') and self.optimizer is not None:
-			del self.optimizer
-			self.optimizer = None
-		
-		import gc
-		gc.collect()
-		torch.cuda.empty_cache()
-		
-		# Verify GPU memory freed
-		if torch.cuda.is_available():
-			allocated = torch.cuda.memory_allocated() / 1024**3
-			print(f"   GPU Memory Allocated: {allocated:.2f} GB")
-		
-		print("   Policy model unloaded")
+		with open(self.checkpoint_dir / "checkpoint_latest.pkl", "wb") as f:
+			pickle.dump(checkpoint, f)
 
 	def load_checkpoint(self, checkpoint_path: str):
-		"""Load training checkpoint to resume"""
+		"""Load orchestrator checkpoint to resume"""
 		print(f"📂 Loading checkpoint from {checkpoint_path}")
-		
-		checkpoint = torch.load(checkpoint_path)
-		
+
+		with open(checkpoint_path, "rb") as f:
+			checkpoint = pickle.load(f)
+
 		self.iteration = checkpoint["iteration"]
 		self.current_lora_path = checkpoint["current_lora_path"]
 		self.training_history = checkpoint["training_history"]
@@ -420,7 +509,15 @@ class PPO_LOOP:
 		"""Generate training curves"""
 		if not self.training_history["iterations"]:
 			return
-		
+
+		try:
+			import matplotlib
+			matplotlib.use("Agg")
+			import matplotlib.pyplot as plt
+		except Exception as e:
+			print(f"⚠️  matplotlib unavailable, skipping plots: {e}")
+			return
+
 		fig, axes = plt.subplots(2, 2, figsize=(15, 10))
 		
 		# Average Reward
@@ -471,7 +568,7 @@ class PPO_LOOP:
 		"""
 		Create temporary prompt file with memory template inserted right before task details
 		"""
-		original_prompt_path = "/workspace/appworld/appworld/experiments/prompts/react_code_agent/instructions.txt"
+		original_prompt_path = self.prompt_file_path
 		
 		# If no memory yet (iteration 0), use original
 		if not self.H or len(self.H.strip()) == 0:
@@ -527,105 +624,55 @@ class PPO_LOOP:
 			raise RuntimeError(f"vLLM server not running! {e}")
 		
 		task_set = random.sample(self.train_ids, self.random_sample_number)
-		all_rollouts = []
 
-		# Create prompt with memory injected
+		# Create prompt with memory injected (once, shared by all rollouts)
 		temp_prompt_path = self._create_prompt_with_memory()
-		
-		for index, task_id in enumerate(tqdm(task_set, desc=f"Running rollouts")):
-			print(f"\n{'='*60}")
-			print(f"Task {index + 1}/{len(task_set)}: {task_id}")
-			print(f"{'='*60}")
-			
+
+		# vLLM selects a served LoRA via the request `model` field, NOT via
+		# extra_body. When an adapter is active the model name must be the served
+		# adapter name; otherwise rollouts silently run on the BASE model.
+		model_name = "ppo_adapter" if self.current_lora_path else self.config.base_model
+
+		# Build one work unit per (task, rollout). Each gets a UNIQUE
+		# experiment_name so concurrent rollouts of the same task use isolated
+		# AppWorld DBs. Unique per-rollout seed keeps the K trajectories diverse
+		# (so LOOP advantages are nonzero).
+		units = []
+		for index, task_id in enumerate(task_set):
 			for rollout in range(self.K):
-				print(f"\nRollout {rollout}")
-
-				extra_body = {
-					"return_token_ids": True
-				}
-				
-				# If using LoRA, specify which one
-				if self.current_lora_path:
-					extra_body["lora_name"] = "ppo_adapter"
-
-				agent = SimplifiedReActCodeAgent(
-					model_config={
-						"client_name": "openai",
-						"api_type": "chat_completions",
-						"base_url": self.config.vllm_url,
-						"name": self.config.base_model,
-						"api_key_env_name": "NO_API_KEY",
-						"temperature": self.config.temperature,
-						"seed": 100,
-						"logprobs": True,
-						"top_logprobs": 1,
-						"extra_body": extra_body,
-						"max_completion_tokens": self.config.max_tokens,
-						"cost_per_token": {
-							"input_cache_hit": 0.0,
-							"input_cache_miss": 0.0,
-							"input_cache_write": 0.0,
-							"output": 0.0
-						},
-						"retry_after_n_seconds": 15,
-						"use_cache": False,
-						"max_retries": 100,
-					},
-					logger_config={"color": True, "verbose": False},
-					appworld_config={"random_seed": 100},
-					prompt_file_path=temp_prompt_path,
-					ignore_multiple_calls=True,
-					max_prompt_length=None,
-					max_output_length=None,
-					max_steps=self.config.max_iters,
-				)
-				
-				task_result = {
+				units.append({
 					"task_id": task_id,
-					"completed": False,
-					"iterations": 0,
-					"error": None,
-					"conversation_length": 0,
-					"overall_success": None,
-					"uuid": uuid.uuid4(),
-					"agent_state": None,
-					"evaluation_details": None
-				}
-				
-				try:  # INDENT THIS - INSIDE THE LOOP!
-					agent.logger.initialize("ppo_training", len(task_set) * self.K, 1, 0)
-					agent.solve_task(task_id)
-					
-					#completed = agent.world.task_completed()
-					evaluation = agent.world.evaluate().to_dict()
-					completed = evaluation["success"]
-					overall_success = len(evaluation['passes']) / evaluation['num_tests']
-					
-					agent_state = self.convert_to_agent_state(agent)
-					agent_state.done = completed
-					
-					task_result["completed"] = completed
-					task_result["iterations"] = agent.step_number
-					task_result["conversation_length"] = len(agent_state.conversation_history)
-					task_result["overall_success"] = overall_success
-					task_result["evaluation_details"] = evaluation
-					task_result["agent_state"] = agent_state
-					
-					print(f"✅ Success: {overall_success:.3f}")
-					
-				except Exception as e:
-					task_result["error"] = str(e)
-					print(f"❌ Error: {e}")
-					task_result["agent_state"] = None
-				
-				finally:
-					# Clean up database
-					# if hasattr(agent, 'world'):
-					# 	agent.world.close()
-					del agent
-				
-				all_rollouts.append(task_result)
-		
+					"experiment_name": f"ppo_i{self.iteration}_t{index}_r{rollout}",
+					"model_name": model_name,
+					"vllm_url": self.config.vllm_url,
+					"temperature": self.rollout_temperature,
+					"seed": self.rollout_seed_base + index * self.K + rollout,
+					"max_tokens": self.config.max_tokens,
+					"train_max_iters": self.train_max_iters,
+					"prompt_path": temp_prompt_path,
+				})
+
+		workers = max(1, int(getattr(self, "rollout_workers", 1)))
+		if workers == 1:
+			# Sequential path (default) — identical rollout logic to before.
+			all_rollouts = [
+				_rollout_worker(u)
+				for u in tqdm(units, desc="Rollouts (sequential)")
+			]
+		else:
+			# Parallel path — N isolated worker processes hitting the shared vLLM
+			# server (which batches the concurrent requests). spawn gives each
+			# worker a clean interpreter (no inherited AppWorld global state).
+			import multiprocessing as mp
+			print(f"\n⚡ Collecting {len(units)} rollouts with {workers} parallel workers "
+				  f"(vLLM batches them; max_num_seqs={self.vllm_max_num_seqs})")
+			ctx = mp.get_context("spawn")
+			all_rollouts = []
+			with ctx.Pool(processes=workers) as pool:
+				for r in tqdm(pool.imap_unordered(_rollout_worker, units),
+							  total=len(units), desc=f"Rollouts (x{workers})"):
+					all_rollouts.append(r)
+
 		return all_rollouts, task_set
 
 	def convert_to_agent_state(self, appworld_agent) -> AgentState:
@@ -828,214 +875,81 @@ class PPO_LOOP:
 			print(f"   Keeping previous template")
 			raise ValueError(f"Claude not called: {e}") 	
 
-	def compute_log_probs(self, episode: dict) -> dict:
-		"""
-		Compute NEW log probabilities for tokens generated during rollout.
-		NOTE: This runs in NO_GRAD mode to save memory - gradients computed later in loss.
-		"""
-		all_token_data = []
-		agent_state = episode["agent_state"]
-		assistant_idx = 0
-		
-		# NO GRADIENTS during log prob computation
-		with torch.no_grad():
-			for i, msg in enumerate(agent_state.conversation_history):
-				if msg.role != "assistant":
+	def _serialize_rollouts_for_training(self, updated_rollouts):
+		"""Convert rollouts to plain dicts the trainer can load without appworld.
+		Each assistant message carries the exact vLLM token ids + old logprobs."""
+		train_data = []
+		for r in updated_rollouts:
+			if r.get("agent_state") is None or r.get("error") is not None:
+				continue
+			messages = []
+			for m in r["agent_state"].conversation_history:
+				if m.role != "assistant":
 					continue
-				
-				if msg.log_probs is None or msg.tokenized_input is None:
+				if not m.log_probs or not m.tokenized_input:
 					continue
-				
-				prompt_token_ids = msg.tokenized_input
-				output_token_data = msg.log_probs
-				output_token_ids = [token_id for _, _, token_id in output_token_data]
-				
-				full_token_ids = prompt_token_ids + output_token_ids
-				full_ids = torch.tensor([full_token_ids], device=self.policy_model.device)
-				
-				# Forward pass WITHOUT gradients
-				outputs = self.policy_model(full_ids)
-				logits = outputs.logits[0]
-				log_probs = torch.log_softmax(logits, dim=-1)
-				
-				prompt_length = len(prompt_token_ids)
-				
-				for j, (token_str, old_logprob, token_id) in enumerate(output_token_data):
-					position = prompt_length + j - 1
-					
-					if position < 0 or position >= log_probs.shape[0]:
-						continue
-					
-					# Extract as Python float (detaches from graph)
-					new_logprob = log_probs[position, token_id].item()
-					
-					all_token_data.append({
-						'new_logprob': new_logprob,  # Now a float, not a tensor
-						'old_logprob': old_logprob,
-						'token_id': token_id,
-						'token_str': token_str,
-						'assistant_turn': assistant_idx,
-						'position': j,
-					})
-				
-				assistant_idx += 1
-				
-				# Clear CUDA cache after each message
-				del outputs, logits, log_probs, full_ids
-				torch.cuda.empty_cache()
-		
-		episode["token_level_data"] = all_token_data
-		return episode
+				messages.append({
+					"tokenized_input": list(m.tokenized_input),
+					# log_probs entries: (token_str, old_logprob, token_id)
+					"log_probs": [tuple(x) for x in m.log_probs],
+				})
+			if messages:
+				train_data.append({"advantage": r.get("advantage", 0), "messages": messages})
+		return train_data
 
-	# def compute_ppo_loss(self, minibatch):
-	# 	"""
-	# 	Compute PPO loss for a minibatch of episodes.
-	# 	Recomputes forward passes with gradients for the actual loss.
-	# 	"""
-	# 	total_loss = torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
-	# 	num_tokens = 0
-		
-	# 	for episode in minibatch:
-	# 		if episode.get("agent_state") is None or episode.get("error") is not None:
-	# 			continue
-			
-	# 		# Get precomputed log probs (no gradients)
-	# 		episode = self.compute_log_probs(episode)  
-	# 		token_data = episode.get("token_level_data", [])
-			
-	# 		if len(token_data) == 0:
-	# 			continue
-			
-	# 		advantage = torch.tensor(episode["advantage"], device=self.policy_model.device)
-			
-	# 		# Process tokens in smaller chunks to save memory
-	# 		for token_info in token_data:
-	# 			new_logprob = torch.tensor(
-	# 				token_info['new_logprob'], 
-	# 				device=self.policy_model.device,
-	# 				requires_grad=False  # This is just data
-	# 			)
-	# 			old_logprob = torch.tensor(
-	# 				token_info['old_logprob'],
-	# 				device=self.policy_model.device,
-	# 				requires_grad=False
-	# 			)
-				
-	# 			# Importance ratio
-	# 			log_ratio = new_logprob - old_logprob
-	# 			ratio = torch.exp(log_ratio)
-				
-	# 			# PPO clipping
-	# 			clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
-				
-	# 			surrogate1 = ratio * advantage
-	# 			surrogate2 = clipped_ratio * advantage
-				
-	# 			token_loss = -torch.min(surrogate1, surrogate2)
-	# 			total_loss = total_loss + token_loss
-	# 			num_tokens += 1
-		
-	# 	if num_tokens == 0:
-	# 		return torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
-		
-	# 	return total_loss / num_tokens
+	def _run_training_subprocess(self, updated_rollouts) -> float:
+		"""Pickle rollouts and run the PPO update in a torch-only subprocess
+		(ppo_baseline/train_step.py). Returns avg training loss."""
+		train_data = self._serialize_rollouts_for_training(updated_rollouts)
+		print(f"   {len(train_data)} trainable episodes")
 
+		next_iter = self.iteration + 1
+		rollouts_pkl = self.checkpoint_dir / f"_rollouts_iter_{next_iter}.pkl"
+		with open(rollouts_pkl, "wb") as f:
+			pickle.dump(train_data, f)
 
-	def compute_ppo_loss(self, minibatch):
-	    """
-	    Compute PPO loss WITH gradients flowing to model.
-	    """
-	    total_loss = torch.tensor(0.0, device=self.policy_model.device)
-	    num_tokens = 0
-	    
-	    for episode in minibatch:
-	        if episode.get("agent_state") is None or episode.get("error") is not None:
-	            continue
-	        
-	        agent_state = episode["agent_state"]
-	        advantage = episode["advantage"]
-	        
-	        if advantage == 0:
-	            continue
-	        
-	        advantage_tensor = torch.tensor(
-	            advantage, 
-	            device=self.policy_model.device,
-	            dtype=torch.float32
-	        )
-	        
-	        # Process each assistant message
-	        for msg in agent_state.conversation_history:
-	            if msg.role != "assistant":
-	                continue
-	            
-	            if msg.log_probs is None or msg.tokenized_input is None:
-	                continue
-	            
-	            prompt_token_ids = msg.tokenized_input
-	            output_token_data = msg.log_probs  # [(token_str, old_logprob, token_id), ...]
-	            output_token_ids = [token_id for _, _, token_id in output_token_data]
-	            
-	            if len(output_token_ids) == 0:
-	                continue
-	            
-	            # Build full sequence
-	            full_token_ids = prompt_token_ids + output_token_ids
-	            full_ids = torch.tensor([full_token_ids], device=self.policy_model.device)
-	            
-	            # Forward pass WITH gradients
-	            outputs = self.policy_model(full_ids)
-	            logits = outputs.logits[0]  # [seq_len, vocab_size]
-	            log_probs = torch.log_softmax(logits, dim=-1)
-	            
-	            prompt_length = len(prompt_token_ids)
-	            
-	            # Compute loss for each generated token
-	            for j, (token_str, old_logprob, token_id) in enumerate(output_token_data):
-	                position = prompt_length + j - 1  # Position that predicts this token
-	                
-	                if position < 0 or position >= log_probs.shape[0]:
-	                    continue
-	                
-	                # NEW log prob - WITH gradient connection
-	                new_logprob = log_probs[position, token_id]
-	                
-	                # OLD log prob - from rollout (no grad needed)
-	                old_logprob_tensor = torch.tensor(
-	                    old_logprob,
-	                    device=self.policy_model.device,
-	                    dtype=torch.float32
-	                )
-	                
-	                # PPO objective
-	                log_ratio = new_logprob - old_logprob_tensor
-	                ratio = torch.exp(log_ratio)
-	                
-	                clipped_ratio = torch.clamp(ratio, 1.0 - self.epsilon, 1.0 + self.epsilon)
-	                
-	                surrogate1 = ratio * advantage_tensor
-	                surrogate2 = clipped_ratio * advantage_tensor
-	                
-	                token_loss = -torch.min(surrogate1, surrogate2)
-	                total_loss = total_loss + token_loss
-	                num_tokens += 1
-	            
-	            # Clean up to save memory
-	            del outputs, logits, log_probs
-	    
-	    if num_tokens == 0:
-	        return torch.tensor(0.0, device=self.policy_model.device, requires_grad=True)
-	    
-	    return total_loss / num_tokens
+		lora_out = str(self.checkpoint_dir / f"lora_iter_{next_iter}")
+		opt_in = ""
+		if self.current_lora_path and (Path(self.current_lora_path) / "optimizer.pt").exists():
+			opt_in = str(Path(self.current_lora_path) / "optimizer.pt")
+		metrics_out = str(Path(lora_out) / "train_metrics.json")
 
-	def shuffled_batchify(self, data, batch_size):
-		indices = list(range(len(data)))
-		random.shuffle(indices)
-		
-		for i in range(0, len(indices), batch_size):
-			batch_idx = indices[i:i + batch_size]
-			yield [data[j] for j in batch_idx]
-	
+		cmd = [
+			self.trainer_python, "-m", "ppo_baseline.train_step",
+			"--base-model", self.config.base_model,
+			"--rollouts", str(rollouts_pkl),
+			"--lora-in", self.current_lora_path or "",
+			"--lora-out", lora_out,
+			"--optimizer-in", opt_in,
+			"--optimizer-out", str(Path(lora_out) / "optimizer.pt"),
+			"--metrics-out", metrics_out,
+			"--epsilon", str(self.epsilon),
+			"--lr", str(self.learning_rate),
+			"--n-epochs", str(self.n_epochs),
+			"--batch-size", str(self.batch_size),
+			"--lora-r", str(self.lora_r),
+			"--lora-alpha", str(self.lora_alpha),
+			"--lora-dropout", str(self.lora_dropout),
+			"--target-modules", self.lora_target_modules,
+		]
+		if self.load_in_4bit:
+			cmd.append("--load-4bit")
+
+		print(f"   Launching trainer: {self.trainer_python} -m ppo_baseline.train_step")
+		subprocess.run(cmd, env=os.environ.copy(), check=True)
+
+		# Trainer finished: advance iteration + adopt the new LoRA
+		self.iteration = next_iter
+		self.current_lora_path = lora_out
+		print(f"💾 Trainer saved LoRA to {self.current_lora_path}")
+
+		try:
+			with open(metrics_out) as f:
+				return json.load(f).get("avg_loss", 0.0)
+		except Exception as e:
+			print(f"   ⚠️  Could not read trainer metrics: {e}")
+			return 0.0
+
 	def train_iteration(self):
 		"""Run one full training iteration with sequential model loading"""
 		print(f"\n{'='*80}")
@@ -1068,19 +982,20 @@ class PPO_LOOP:
 			rollouts, task_set = self.collect_rollouts()
 			updated_rollouts = self.get_advantages(rollouts, task_set)
 
-			print("\n" + "="*80)
-			print("Updating Memory Template")
-			print("="*80)
-			
-			self.H = self._update_memory_template(updated_rollouts)
-			
-			# Save memory snapshot
-			self.memory_history.append({
-				'iteration': self.iteration,
-				'H': self.H,
-				'timestamp': time.time()
-			})
-			self._save_memory_snapshot()
+			if self.use_memory:
+				print("\n" + "="*80)
+				print("Updating Memory Template")
+				print("="*80)
+
+				self.H = self._update_memory_template(updated_rollouts)
+
+				# Save memory snapshot
+				self.memory_history.append({
+					'iteration': self.iteration,
+					'H': self.H,
+					'timestamp': time.time()
+				})
+				self._save_memory_snapshot()
 
 		finally:
 			self.stop_vllm_server()
@@ -1089,76 +1004,42 @@ class PPO_LOOP:
 			time.sleep(10)
 		
 		# ================================
-		# PHASE 2: TRAINING WITH POLICY MODEL
+		# PHASE 2: TRAINING IN A SEPARATE PROCESS (torch isolated from appworld)
 		# ================================
 		print("\n" + "="*80)
-		print("PHASE 2: Training Policy Model")
+		print("PHASE 2: Training Policy Model (subprocess)")
 		print("="*80)
-		
-		# Initialize policy model (now that vLLM is stopped)
-		self.policy_model = self._initialize_policy_model()
-		
-		# PPO training loop
-		total_epoch_loss = 0
-		for epoch in range(self.n_epochs):
-			epoch_loss = 0
-			num_batches = 0
-			
-			for minibatch in self.shuffled_batchify(updated_rollouts, self.batch_size):
-				self.optimizer.zero_grad()
-				
-				loss = self.compute_ppo_loss(minibatch)
-				
-				if loss.requires_grad:
-					loss.backward()
-					torch.nn.utils.clip_grad_norm_(self.policy_model.parameters(), 1.0)
-					self.optimizer.step()
-				
-				epoch_loss += loss.item()
-				num_batches += 1
-			
-			avg_epoch_loss = epoch_loss / num_batches if num_batches > 0 else 0
-			total_epoch_loss += avg_epoch_loss
-			print(f"   Epoch {epoch+1}/{self.n_epochs}, Avg Loss: {avg_epoch_loss:.4f}")
-		
+
+		avg_loss = self._run_training_subprocess(updated_rollouts)
+
 		# ================================
-		# PHASE 3: SAVE AND CLEANUP
+		# PHASE 3: SAVE CHECKPOINT
 		# ================================
 		print("\n" + "="*80)
-		print("PHASE 3: Saving Checkpoint and Cleaning Up")
+		print("PHASE 3: Saving Checkpoint")
 		print("="*80)
-		
-		# Save updated LoRA
-		self.iteration += 1
-		self.current_lora_path = str(self.checkpoint_dir / f"lora_iter_{self.iteration}")
-		self.policy_model.save_pretrained(self.current_lora_path)
-		print(f"💾 Saved LoRA to {self.current_lora_path}")
-		
+
 		# Compute metrics
 		avg_reward = sum(r.get("overall_success", 0) or 0 for r in updated_rollouts) / len(updated_rollouts)
 		successful_rollouts = sum(1 for r in updated_rollouts if r.get("completed", False))
 		success_rate = (successful_rollouts / len(updated_rollouts)) * 100
-		avg_loss = total_epoch_loss / self.n_epochs if self.n_epochs > 0 else 0
-		
+
 		# Update training history
 		self.training_history["iterations"].append(self.iteration)
 		self.training_history["avg_rewards"].append(avg_reward)
 		self.training_history["success_rates"].append(success_rate)
 		self.training_history["avg_losses"].append(avg_loss)
 		self.training_history["completed_tasks"].append(successful_rollouts)
-		
+
 		# Save checkpoint and metrics
 		self.save_checkpoint()
 		self.save_metrics()
-		
+
 		try:
 			self.plot_training_curves()
 		except Exception as e:
 			print(f"⚠️  Failed to plot training curves: {e}")
-		
-		# Clean up policy model to free GPU memory for next iteration
-		self._cleanup_policy_model()
-		
+
 		print(f"\n📊 Iteration {self.iteration} Summary:")
 		print(f"   Average Reward: {avg_reward:.4f}")
 		print(f"   Success Rate: {success_rate:.1f}%")
@@ -1215,10 +1096,68 @@ def main():
 					   help="Number of training iterations")
 	parser.add_argument("--difficulties", type=int, nargs="+", default=[1, 2],
 					   help="Task difficulty levels to train on (1, 2, and/or 3)")
-	parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints",  
-					   help="Directory to save checkpoints")
-	
+	parser.add_argument("--checkpoint-dir", type=str, default=None,
+					   help="Checkpoint dir. If omitted, defaults to "
+							"./checkpoints/diff_<difficulties> so each difficulty "
+							"trains a SEPARATE adapter (no overwrite).")
+	# Rollout sampling (LOOP needs diverse trajectories -> nonzero advantage)
+	parser.add_argument("--rollout-temperature", type=float, default=1.0,
+					   help="Sampling temperature during rollouts (paper: 1.0)")
+	parser.add_argument("--rollout-seed-base", type=int, default=1000,
+					   help="Base seed; each rollout gets a unique seed offset")
+	parser.add_argument("--train-max-iters", type=int, default=40,
+					   help="Max agent<->env interactions per rollout (paper: 40 train, 50 eval)")
+	parser.add_argument("--k", type=int, default=6, help="Rollouts per task (K)")
+	parser.add_argument("--tasks-per-iter", type=int, default=40,
+					   help="Tasks sampled per iteration (random_sample_number)")
+	parser.add_argument("--n-epochs", type=int, default=1,
+					   help="PPO inner epochs per iteration. 1 = 1-epoch token-LOOP "
+							"(~3x faster than 3); paper's full LOOP uses >1.")
+	parser.add_argument("--rollout-workers", type=int, default=1,
+					   help="Parallel rollout processes (1 = sequential). ~max_num_seqs "
+							"(e.g. 8) saturates the vLLM server. Cuts rollout wall-clock.")
+	# vLLM serving (rollout phase)
+	parser.add_argument("--tensor-parallel-size", type=int, default=2,
+					   help="vLLM tensor-parallel size (GPUs for serving)")
+	parser.add_argument("--gpu-mem-util", type=float, default=0.90,
+					   help="vLLM --gpu-memory-utilization (vLLM runs alone in phase 1)")
+	parser.add_argument("--max-model-len", type=int, default=20000,
+					   help="vLLM --max-model-len")
+	parser.add_argument("--max-num-seqs", type=int, default=8,
+					   help="vLLM --max-num-seqs (rollouts are sequential; small fits 16GB)")
+	parser.add_argument("--quantization", type=str, default=None,
+					   help="vLLM --quantization (e.g. fp8); omit for none")
+	# Training phase
+	parser.add_argument("--load-4bit", action="store_true",
+					   help="Load frozen base in 4-bit (QLoRA); requires bitsandbytes")
+	# Portability
+	parser.add_argument("--prompt-file", type=str, default=None,
+					   help="Path to react_code_agent instructions.txt "
+							"(default: $APPWORLD_PROMPT_FILE or local appworld repo)")
+	# Prompt-memory (H) feature
+	parser.add_argument("--use-memory", action="store_true",
+					   help="Enable the Claude-generated prompt-memory (H) each "
+							"iteration; requires ANTHROPIC_API_KEY. Off = pure RL.")
+	# Trainer subprocess (torch isolated from appworld)
+	parser.add_argument("--trainer-python", type=str, default=None,
+					   help="Python with torch/transformers/peft for the training "
+							"subprocess (default: $TRAINER_PYTHON or vllm_env python)")
+	parser.add_argument("--vllm-bin", type=str, default=None,
+					   help="Path to the vllm CLI (default: $VLLM_BIN or vllm_env/bin/vllm)")
+	parser.add_argument("--lora-r", type=int, default=16)
+	parser.add_argument("--lora-alpha", type=int, default=32)
+	parser.add_argument("--lora-dropout", type=float, default=0.05)
+	parser.add_argument("--target-modules", type=str,
+					   default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
+					   help="Comma-separated LoRA target modules")
+
 	args = parser.parse_args()
+
+	# Per-difficulty checkpoint separation by default
+	checkpoint_dir = args.checkpoint_dir
+	if checkpoint_dir is None:
+		diff_tag = "_".join(str(d) for d in args.difficulties)
+		checkpoint_dir = f"./checkpoints/diff_{diff_tag}"
 	
 	# Evaluation mode
 	if args.eval_only:
@@ -1232,16 +1171,34 @@ def main():
 	config = Config()
 	
 	ppo_loop = PPO_LOOP(
-		K=6,
-		random_sample_number=40,
+		K=args.k,
+		random_sample_number=args.tasks_per_iter,
 		difficulties=args.difficulties,
 		config=config,
 		epsilon=0.2,
 		learning_rate=5e-5,
-		n_epochs=3,
+		n_epochs=args.n_epochs,
 		batch_size=3,
-		checkpoint_dir=args.checkpoint_dir,
-		resume_from=args.resume
+		checkpoint_dir=checkpoint_dir,
+		resume_from=args.resume,
+		rollout_temperature=args.rollout_temperature,
+		rollout_seed_base=args.rollout_seed_base,
+		train_max_iters=args.train_max_iters,
+		rollout_workers=args.rollout_workers,
+		vllm_tensor_parallel=args.tensor_parallel_size,
+		vllm_gpu_mem_util=args.gpu_mem_util,
+		vllm_max_model_len=args.max_model_len,
+		vllm_max_num_seqs=args.max_num_seqs,
+		vllm_quantization=args.quantization,
+		load_in_4bit=args.load_4bit,
+		prompt_file_path=args.prompt_file,
+		use_memory=args.use_memory,
+		lora_r=args.lora_r,
+		lora_alpha=args.lora_alpha,
+		lora_dropout=args.lora_dropout,
+		lora_target_modules=args.target_modules,
+		trainer_python=args.trainer_python,
+		vllm_bin=args.vllm_bin,
 	)
 
 	start_iter = ppo_loop.iteration
@@ -1275,7 +1232,6 @@ def main():
 		# Cleanup: stop vLLM if still running
 		print("\n🧹 Final cleanup...")
 		ppo_loop.stop_vllm_server()
-		ppo_loop._cleanup_policy_model()
 	
 	print("\n✨ Training complete!")
 	print(f"   Final LoRA: {ppo_loop.current_lora_path}")
