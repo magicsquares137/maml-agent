@@ -122,7 +122,8 @@ def _rollout_worker(unit: dict) -> dict:
 			agent_state=agent_state,
 		)
 	except Exception as e:
-		result["error"] = str(e)
+		import traceback as _tb
+		result["error"] = _tb.format_exc()
 		result["agent_state"] = None
 	finally:
 		del agent
@@ -689,7 +690,9 @@ class PPO_LOOP:
 		if n_err:
 			for r in all_rollouts:
 				if r.get("error"):
-					print(f"   sample rollout error: {str(r['error'])[:400]}")
+					print("   ---- sample rollout traceback ----")
+					print(str(r['error']))
+					print("   ----------------------------------")
 					break
 
 		return all_rollouts, task_set
