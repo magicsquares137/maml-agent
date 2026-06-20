@@ -410,24 +410,26 @@ class PPO_LOOP:
 		finally:
 			self.vllm_process = None
 			
-			# Nuclear option: kill ALL vLLM and Ray processes
+			# Nuclear option: kill ALL vLLM and Ray processes. Best-effort — a
+			# missing binary (e.g. `ray` is in vllm_env, NOT the appworld/orchestrator
+			# env) must NOT crash cleanup, or it kills the whole run after rollouts.
 			print("   Cleaning up vLLM/Ray processes...")
-			subprocess.run(["pkill", "-9", "-f", "vllm"], stderr=subprocess.DEVNULL)
-			subprocess.run(["pkill", "-9", "-f", "ray::"], stderr=subprocess.DEVNULL)
-			subprocess.run(["pkill", "-9", "-f", "_raylet"], stderr=subprocess.DEVNULL)
-			
-			# Also kill Ray completely
+			for _cmd in (["pkill", "-9", "-f", "vllm"],
+						 ["pkill", "-9", "-f", "ray::"],
+						 ["pkill", "-9", "-f", "_raylet"],
+						 ["ray", "stop", "--force"]):
+				try:
+					subprocess.run(_cmd, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+				except FileNotFoundError:
+					pass  # binary not on PATH in this env
+
+			# Also kill Ray completely (if importable in this env)
 			try:
 				import ray
 				if ray.is_initialized():
 					ray.shutdown()
-			except:
+			except Exception:
 				pass
-			
-			# Force Ray shutdown via CLI
-			subprocess.run(["ray", "stop", "--force"], 
-						  stderr=subprocess.DEVNULL, 
-						  stdout=subprocess.DEVNULL)
 			
 			# Close log files if they exist
 			if hasattr(self, 'vllm_stdout_file'):
