@@ -16,14 +16,16 @@ load_dotenv()
 # CONFIGURATION
 # =============================================================================
 
-HF_TOKEN = os.getenv("HF_TOKEN")  
+HF_TOKEN = os.getenv("HF_TOKEN")
 HF_ORG = "arkitekt-ai"
-BASE_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"
+BASE_MODEL = "Qwen/Qwen3-8B"
 
 # Specialists to merge - (checkpoint_dir, lora_iteration, output_name)
+# NOTE: update these to the actual run dirs/iterations before use, e.g.
+#   ("checkpoints/diff_1", 10, "qwen3-8b-specialist-d1")
 SPECIALISTS = [
-    ("checkpoints/specialist_d1_take2", 3, "qwen-coder-7b-specialist-d1"),
-    ("checkpoints/specialist_d2", 3, "qwen-coder-7b-specialist-d2"),
+    ("checkpoints/diff_1", 10, "qwen3-8b-specialist-d1"),
+    ("checkpoints/diff_2", 10, "qwen3-8b-specialist-d2"),
 ]
 
 # =============================================================================
@@ -53,7 +55,7 @@ def merge_and_push(checkpoint_dir: str, lora_iter: int, output_name: str):
     base_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL,
         torch_dtype=torch.bfloat16,
-        device_map="auto",
+        device_map="cpu",   # 8B bf16 doesn't fit one 16GB card; merge on CPU
         trust_remote_code=True,
     )
     

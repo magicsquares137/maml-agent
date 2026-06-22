@@ -14,12 +14,13 @@ def merge_lora_to_base(lora_path: str, base_model: str, output_path: str):
     print(f"   Base: {base_model}")
     print(f"   Output: {output_path}")
     
-    # Load base model
-    print("   Loading base model...")
+    # Load base model on CPU: an 8B in bf16 (~16GB) doesn't fit one 16GB card,
+    # and during training the GPUs are busy anyway. Merging is one-time, CPU is fine.
+    print("   Loading base model (CPU)...")
     base = AutoModelForCausalLM.from_pretrained(
         base_model,
-        torch_dtype="auto",
-        device_map="auto"
+        torch_dtype=torch.bfloat16,
+        device_map="cpu",
     )
     
     # Load LoRA
@@ -49,8 +50,8 @@ def main():
     parser = argparse.ArgumentParser(description="Merge LoRA with base model")
     parser.add_argument("--lora", type=str, required=True,
                        help="Path to LoRA adapter")
-    parser.add_argument("--base", type=str, 
-                       default="Qwen/Qwen2.5-Coder-7B-Instruct",
+    parser.add_argument("--base", type=str,
+                       default="Qwen/Qwen3-8B",
                        help="Base model name or path")
     parser.add_argument("--output", type=str, required=True,
                        help="Output path for merged model")

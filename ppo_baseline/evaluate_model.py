@@ -1,22 +1,41 @@
 # evaluate_model.py
+import os
+from dotenv import load_dotenv, find_dotenv
+# Load .env + set APPWORLD_ROOT BEFORE importing appworld (it resolves the root
+# at import time and defaults to cwd otherwise).
+load_dotenv(find_dotenv())
+if os.getenv("APPWORLD_ROOT"):
+    os.environ["APPWORLD_ROOT"] = os.getenv("APPWORLD_ROOT")
+
 import argparse
 import subprocess
 import time
 import signal
-import os
 import requests
 from pathlib import Path
 from appworld import load_task_ids
 from appworld_agents.code.simplified.react_code_agent import SimplifiedReActCodeAgent
 
-def start_vllm(model_path: str, port: int = 8000):
-    """Start vLLM server"""
+# The appworld agent requires these env vars (fill_model_server_url reads
+# MODEL_SERVER_URL even when base_url has no template).
+os.environ.setdefault("OPENAI_API_KEY", "EMPTY")
+os.environ.setdefault("NO_API_KEY", "EMPTY")
+os.environ.setdefault("MODEL_SERVER_URL", "http://localhost:8000")
+
+VLLM_BIN = os.environ.get("VLLM_BIN", "vllm")
+
+def start_vllm(model_path: str, port: int = 8000, tensor_parallel: int = 2,
+               gpu_mem_util: float = 0.90, max_num_seqs: int = 8, max_model_len: int = 20000):
+    """Start vLLM server. Defaults sized for an 8B on 2x16GB cards (TP=2);
+    the old 0.45 util / no-TP / 30k-len couldn't fit 8B on 16GB."""
     cmd = [
-        "vllm", "serve", model_path,
+        VLLM_BIN, "serve", model_path,
         "--host", "localhost",
         "--port", str(port),
-        "--max-model-len", "30000",
-        "--gpu-memory-utilization", "0.45",
+        "--max-model-len", str(max_model_len),
+        "--gpu-memory-utilization", str(gpu_mem_util),
+        "--tensor-parallel-size", str(tensor_parallel),
+        "--max-num-seqs", str(max_num_seqs),
     ]
     
     log_file = open("vllm_eval.log", "ab")
@@ -53,16 +72,23 @@ def stop_vllm(process):
     except:
         pass
     
-    # Nuclear cleanup
-    subprocess.run(["pkill", "-9", "-f", "vllm"], stderr=subprocess.DEVNULL)
-    subprocess.run(["pkill", "-9", "-f", "ray"], stderr=subprocess.DEVNULL)
-    subprocess.run(["ray", "stop", "--force"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-    
+    # Nuclear cleanup (best-effort: `ray` may not be on PATH in the eval env)
+    for _cmd in (["pkill", "-9", "-f", "vllm"], ["pkill", "-9", "-f", "ray"],
+                 ["ray", "stop", "--force"]):
+        try:
+            subprocess.run(_cmd, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        except FileNotFoundError:
+            pass
+
     time.sleep(10)
 
 def create_prompt_with_memory(memory_path: str | None) -> str:
     """Create prompt file with memory template"""
-    original_prompt = "/workspace/appworld/appworld/experiments/prompts/react_code_agent/instructions.txt"
+    original_prompt = os.environ.get(
+        "APPWORLD_PROMPT_FILE",
+        os.path.join(os.environ.get("APPWORLD_ROOT", "."),
+                     "experiments/prompts/react_code_agent/instructions.txt"),
+    )
     
     if not memory_path:
         return original_prompt
@@ -128,14 +154,14 @@ def evaluate(model_path: str, memory_path: str | None, dataset: str, max_tasks: 
                     "base_url": "http://localhost:8000/v1",
                     "name": model_path,
                     "api_key_env_name": "NO_API_KEY",
-                    "temperature": 0.7,
+                    "temperature": 0.0,   # greedy eval (matches baseline Config.temperature=0.0)
                     "seed": 100,
                     "max_completion_tokens": 2048,
                     "cost_per_token": {"input_cache_hit": 0.0, "input_cache_miss": 0.0, "output": 0.0},
                 },
                 logger_config={"color": True, "verbose": False},
                 prompt_file_path=prompt_path,
-                max_steps=15,
+                max_steps=50,   # paper: up to 50 interactions during evaluation
             )
             
             try:
