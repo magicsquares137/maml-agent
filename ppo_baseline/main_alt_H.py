@@ -158,6 +158,7 @@ class PPO_LOOP:
 		vllm_max_model_len: int = 20000,
 		vllm_max_num_seqs: int = 8,   # rollouts are sequential; small batch fits 16GB
 		vllm_quantization: str = None,
+		vllm_port: int = 8000,        # distinct port per arm when 2 arms share a machine
 		# --- training phase (runs in a separate process: train_step.py) ---
 		load_in_4bit: bool = False,
 		lora_r: int = 16,
@@ -270,7 +271,7 @@ class PPO_LOOP:
 		)
 
 		self.vllm_process = None
-		self.vllm_port = 8000
+		self.vllm_port = vllm_port
 		self.vllm_host = "localhost"
 
 		# Rollout sampling config (diverse trajectories -> nonzero LOOP advantage)
@@ -647,7 +648,7 @@ class PPO_LOOP:
 					"task_id": task_id,
 					"experiment_name": f"ppo_i{self.iteration}_t{index}_r{rollout}",
 					"model_name": model_name,
-					"vllm_url": self.config.vllm_url,
+					"vllm_url": f"http://{self.vllm_host}:{self.vllm_port}/v1",
 					"temperature": self.rollout_temperature,
 					"seed": self.rollout_seed_base + index * self.K + rollout,
 					"max_tokens": self.config.max_tokens,
@@ -1147,6 +1148,8 @@ def main():
 					   help="vLLM --max-model-len")
 	parser.add_argument("--max-num-seqs", type=int, default=8,
 					   help="vLLM --max-num-seqs (rollouts are sequential; small fits 16GB)")
+	parser.add_argument("--vllm-port", type=int, default=8000,
+					   help="vLLM server port — use distinct ports when running 2 arms on one machine")
 	parser.add_argument("--quantization", type=str, default=None,
 					   help="vLLM --quantization (e.g. fp8); omit for none")
 	# Training phase
@@ -1212,6 +1215,7 @@ def main():
 		vllm_max_model_len=args.max_model_len,
 		vllm_max_num_seqs=args.max_num_seqs,
 		vllm_quantization=args.quantization,
+		vllm_port=args.vllm_port,
 		load_in_4bit=args.load_4bit,
 		prompt_file_path=args.prompt_file,
 		use_memory=args.use_memory,
