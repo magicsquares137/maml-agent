@@ -383,10 +383,11 @@ class PPO_LOOP:
 			return
 		
 		print("\n🛑 Stopping vLLM server...")
-		
+		# Capture the PID before the try — it's also this vLLM's SESSION id (started
+		# with start_new_session=True), used for an isolated cleanup in `finally`.
+		vllm_pid = self.vllm_process.pid
+
 		try:
-			# Get the PID before killing
-			vllm_pid = self.vllm_process.pid
 			print(f"   vLLM main PID: {vllm_pid}")
 			
 			# Kill the process group (this kills all child processes too)
@@ -412,24 +413,16 @@ class PPO_LOOP:
 		finally:
 			self.vllm_process = None
 			
-			# Nuclear option: kill ALL vLLM and Ray processes. Best-effort — a
-			# missing binary (e.g. `ray` is in vllm_env, NOT the appworld/orchestrator
-			# env) must NOT crash cleanup, or it kills the whole run after rollouts.
-			print("   Cleaning up vLLM/Ray processes...")
-			for _cmd in (["pkill", "-9", "-f", "vllm"],
-						 ["pkill", "-9", "-f", "ray::"],
-						 ["pkill", "-9", "-f", "_raylet"],
-						 ["ray", "stop", "--force"]):
-				try:
-					subprocess.run(_cmd, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
-				except FileNotFoundError:
-					pass  # binary not on PATH in this env
-
-			# Also kill Ray completely (if importable in this env)
+			# Kill ONLY this arm's own vLLM SESSION (vllm_pid is the session leader).
+			# CRITICAL for multi-arm-per-machine: a broad `pkill -f vllm` would also
+			# match OTHER arms' vLLM servers AND this orchestrator's own command line
+			# (it contains `--vllm-port`), causing self-kill and cross-arm kills.
+			# `pkill -s <sid>` is process-isolated: it only hits this session (which
+			# includes the EngineCore/Worker children) and nothing else.
+			print(f"   Cleaning up vLLM session {vllm_pid}...")
 			try:
-				import ray
-				if ray.is_initialized():
-					ray.shutdown()
+				subprocess.run(["pkill", "-9", "-s", str(vllm_pid)],
+							   stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
 			except Exception:
 				pass
 			
