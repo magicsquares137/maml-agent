@@ -1,0 +1,682 @@
+\documentclass[11pt]{article}
+
+% ---- packages ----
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage[authoryear,round]{natbib}
+\usepackage[colorlinks=true,allcolors=blue!60!black]{hyperref}
+\usepackage{url}
+\usepackage{authblk}
+\usepackage{caption}
+\captionsetup{font=small}
+\graphicspath{{figures/}}
+
+\newcommand{\tv}{\tau}                      % task vector
+\newcommand{\base}{\theta_{0}}
+\newcommand{\Real}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\indic}{\mathbf{1}}
+\newcommand{\TODO}[1]{\textcolor{red}{[#1]}} % flags for the author to fill/verify
+
+\title{\bf Merging Reinforced Specialists Matches Joint Multi-Task RL:\\
+A Calibrated Null Result on the AppWorld Agent Benchmark}
+\author{\TODO{authors}}
+\affil{\TODO{affiliation}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We ask whether merging per-difficulty reinforcement-learning (RL) specialists can
+substitute for joint multi-task RL on the AppWorld interactive-agent benchmark.
+We train difficulty-1 and difficulty-2 Qwen3-8B specialists with LOOP
+(a leave-one-out / RLOO advantage plugged into a PPO clipped objective, with LoRA
+adapters) and merge them with TIES and RAM+. On the benchmark's primary metric ---
+task-goal completion (TGC) on 168 held-out tasks --- every RL variant (the two
+specialists, their two merges, and a jointly trained model) is statistically
+indistinguishable (McNemar $p\ge0.56$; every paired $\Delta$TGC 95\% bootstrap CI
+includes $0$); only RL over the base model clears the noise wall. In particular,
+\emph{merging matches joint multi-task RL} --- the comparison the cross-domain
+RL-merging setting structurally cannot make. To interpret this null we characterise the
+parameter-space geometry of the specialists' task vectors, which --- unlike the
+performance numbers --- carries no task-sampling noise. The specialists are
+near-orthogonal (cosine $0.06$--$0.10$) despite $\sim\!65\%$ support overlap, and this
+cosine grows monotonically from $\approx0.00$ to $\approx0.10$ over training; we
+calibrate it against a random-initialisation floor ($|\cos|<10^{-4}$) and a same-run
+ceiling ($\approx0.80$), establishing the near-orthogonality reflects what the
+specialists learned, not the low-rank parameterisation. Because task vectors are
+near-orthogonal, support co-occurrence (which RAM partitions on) is decoupled from
+direction, so support- and sign-based merging (RAM, TIES) reduce to near-uniform
+averaging here. Finally, we caution against a tempting over-reading: on a
+\emph{continuous} partial-credit metric the merged models score below the un-merged
+ones, but this signal reverses relative to TGC, does not reflect emergent cross-task
+capability (joint does not exceed the per-task best specialist), and cannot be rescued
+by trajectory-aware checkpoint selection --- so we report it as a metric-sensitivity
+observation, not a capability result. We release all code and statistics.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+Model merging promises to combine independently fine-tuned specialists into a single
+multi-task model without joint retraining, by adding their \emph{task vectors}
+(parameter offsets from a shared base) back onto the base
+\citep{ilharco2023taskarithmetic}. A recent line of work extends merging to
+\emph{reinforced} agentic models, where each specialist is trained with RL, and
+proposes support- or subspace-aware merge rules such as RAM \citep{ram2026} and Iso-CTS
+\citep{isocts2025}. A central appeal of the
+merging setting is that it applies precisely when joint training is impossible --- when
+the specialists come from different sources whose training data cannot be pooled.
+
+That appeal has a corollary rarely tested: \emph{when data can be pooled, does merging
+actually match joint multi-task RL?} We study this question in a controlled
+within-benchmark setting on AppWorld \citep{trivedi2024appworld}, an interactive
+digital-agent benchmark whose tasks are annotated by difficulty. We train two RL
+specialists (difficulty-1 and difficulty-2), a jointly trained model on their union,
+and two merges of the specialists, all from the same Qwen3-8B base with identical
+recipe, and evaluate on the held-out \texttt{test\_normal} split.
+
+Our findings are deliberately modest and, we argue, honest:
+\begin{enumerate}
+\item \textbf{On the primary metric, everything ties.} On $168$ tasks, the specialists,
+their merges, and the joint model are statistically indistinguishable in TGC. Only RL
+over the base model is significant. At this scale ($8$B, $\sim\!10$ RL iterations,
+$1$--$2$ task margins) the interesting comparisons live below the noise wall
+(\S\ref{sec:results-perf}).
+\item \textbf{Merging matches the baseline merging cannot run.} Merging is
+indistinguishable from joint multi-task RL on the same data --- the comparison the
+cross-domain setting forecloses (\S\ref{sec:results-perf}).
+\item \textbf{A calibrated geometric diagnostic.} The specialists' task vectors are
+near-orthogonal (cosine $0.06$--$0.10$) despite large support overlap, and this small
+shared component \emph{develops} over training. We calibrate the measurement against a
+floor and ceiling so it cannot be dismissed as a low-rank artifact, and use it to
+explain why support- and sign-based merging have little to disentangle here
+(\S\ref{sec:results-geom}, \S\ref{sec:results-calib}, \S\ref{sec:discussion}).
+\item \textbf{A cautionary metric-sensitivity result.} A continuous partial-credit
+metric resolves differences TGC cannot, and reports the merged models below the
+un-merged ones. We show \emph{not} to over-read this: it reverses relative to TGC, it is
+not emergent cross-task capability (joint does not exceed the per-task best specialist,
+and a single specialist also beats the merges), and it cannot be closed by
+trajectory-aware checkpoint selection (\S\ref{sec:results-metric}). We document it as a
+mechanism observation, and treat the failed over-readings as part of the contribution.
+\end{enumerate}
+
+We do not claim a new merging method or a performance win; we report a calibrated null,
+a mechanism for it, and an explicit account of the stronger claims the data does
+\emph{not} support. Selecting the merge checkpoint by an interference-aware objective ---
+a natural idea --- provably cannot help in this regime, which we develop as future work
+(\S\ref{sec:future}).
+
+\section{Preliminaries}
+\label{sec:prelim}
+
+\subsection{Low-rank adaptation (LoRA)}
+\label{sec:prelim-lora}
+All models here are fine-tuned with LoRA \citep{hu2022lora}. For a frozen weight matrix
+$W_0\in\Real^{d_{\text{out}}\times d_{\text{in}}}$, LoRA learns a low-rank update
+\begin{equation}
+W = W_0 + \Delta W,\qquad
+\Delta W = \tfrac{\alpha}{r}\,B A,\quad
+B\in\Real^{d_{\text{out}}\times r},\;A\in\Real^{r\times d_{\text{in}}},\;
+r\ll\min(d_{\text{out}},d_{\text{in}}),
+\end{equation}
+with $A$ initialised randomly and $B$ initialised to $0$ (so $\Delta W=0$ at the start of
+training), and $\alpha$ a fixed scale. Only $B,A$ are trained. After training we
+\emph{merge the adapter into the base}, obtaining a full model $\theta$; the associated
+\emph{task vector} is $\tv=\theta-\base$, whose per-matrix block equals
+$\tfrac{\alpha}{r}BA$. Two facts about LoRA matter downstream. (i) Because every
+specialist adapts the \emph{same} target matrices, the supports of different task vectors
+(the coordinates they modify) largely coincide by construction --- a point we
+control for. (ii) $\Delta W$ is rank-$\le r$; whether this constrains the \emph{direction}
+of $\tv$ relative to another specialist's is an empirical question we calibrate in
+\S\ref{sec:results-geom}.
+
+\subsection{PPO, RLOO, and LOOP}
+\label{sec:prelim-rl}
+Our specialists are trained with LOOP \citep{loop2025}, a critic-free policy-gradient
+method for multi-turn LLM agents that combines a leave-one-out advantage with a PPO-style
+clipped objective.
+
+\paragraph{PPO.} Proximal Policy Optimisation \citep{schulman2017ppo} optimises a clipped
+surrogate. With the importance ratio
+$\rho_t(\theta)=\pi_\theta(a_t\mid s_t)/\pi_{\theta_{\text{old}}}(a_t\mid s_t)$ and an
+advantage estimate $\hat A_t$,
+\begin{equation}
+\mathcal{L}^{\text{CLIP}}(\theta)=
+\hat\E_t\!\Big[\min\big(\rho_t(\theta)\hat A_t,\;
+\mathrm{clip}(\rho_t(\theta),1-\epsilon,1+\epsilon)\hat A_t\big)\Big].
+\end{equation}
+
+\paragraph{RLOO.} REINFORCE Leave-One-Out \citep{kool2019rloo,ahmadian2024rloo} removes
+the value network by using the other samples as a baseline. For a prompt $x$, draw
+$K$ trajectories $y_1,\dots,y_K\sim\pi_{\theta_{\text{old}}}(\cdot\mid x)$ with scalar
+returns $R(y_i)$. The leave-one-out advantage is
+\begin{equation}
+\hat A_i \;=\; R(y_i)-\frac{1}{K-1}\sum_{j\neq i}R(y_j)
+\;=\;\frac{K}{K-1}\Big(R(y_i)-\bar R\Big),\qquad
+\bar R=\frac1K\sum_{k}R(y_k),
+\end{equation}
+an unbiased, low-variance baseline requiring no critic.
+
+\paragraph{LOOP.} LOOP applies the RLOO advantage \emph{within} the PPO clipped objective
+for long-horizon agents. Each of the $K$ rollouts is a full interaction trajectory; the
+trajectory-level advantage $\hat A_i$ is broadcast to every token, and the clipped
+surrogate is optimised for $N_{\text{epoch}}$ inner epochs per batch:
+\begin{equation}
+\mathcal{L}^{\text{LOOP}}(\theta)=
+\hat\E_{x}\,\hat\E_{i\in[K]}\,\hat\E_{t\in y_i}
+\Big[\min\big(\rho_{i,t}(\theta)\hat A_i,\;
+\mathrm{clip}(\rho_{i,t}(\theta),1-\epsilon,1+\epsilon)\hat A_i\big)\Big],
+\end{equation}
+with $\rho_{i,t}(\theta)=\pi_\theta(a_{i,t}\mid s_{i,t})/\pi_{\theta_{\text{old}}}(a_{i,t}\mid s_{i,t})$.
+Following \citet{loop2025} we drop transitions with $|\hat A_i|<\delta$ (advantage
+filtering). The reward is the AppWorld task outcome (\S\ref{sec:setup-bench}).
+
+\subsection{Model merging: TIES and RAM}
+\label{sec:prelim-merge}
+Given $T$ specialists with task vectors $\tv_1,\dots,\tv_T$ (each $\tv_t=\theta_t-\base$),
+a merge produces $\theta_{\text{merge}}=\base+\tv_{\text{merge}}$.
+
+\paragraph{TIES.} TIES-merging \citep{yadav2023ties} reduces interference in three steps:
+(i) \emph{trim} each $\tv_t$ to its top-$k\%$ magnitude coordinates; (ii) \emph{elect} a
+per-coordinate sign $\gamma_i=\operatorname{sign}\!\big(\sum_t \hat\tv_{t,i}\big)$;
+(iii) \emph{disjoint-average} only the sign-agreeing entries,
+\begin{equation}
+(\tv_{\text{merge}})_i=\frac{1}{|\mathcal{A}_i|}\sum_{t\in\mathcal{A}_i}\hat\tv_{t,i},
+\qquad \mathcal{A}_i=\{t:\operatorname{sign}(\hat\tv_{t,i})=\gamma_i\},
+\end{equation}
+scaled as $\base+\lambda\,\tv_{\text{merge}}$.
+
+\paragraph{RAM.} RAM \citep{ram2026} partitions coordinates by \emph{support
+co-occurrence}. With threshold $\varepsilon$, define the support mask
+$m_{t,i}=\indic[\,|\tv_{t,i}|>\varepsilon\,]$ and the overlap count
+$c_i=\sum_{t}m_{t,i}$. Coordinates split into \emph{shared} $\mathcal{S}=\{i:c_i\ge2\}$
+and \emph{unique} $\mathcal{U}=\{i:c_i=1\}$:
+\begin{equation}
+(\tv_{\text{merge}})_i=
+\begin{cases}
+\dfrac{1}{c_i}\displaystyle\sum_{t:\,m_{t,i}=1}\tv_{t,i}, & i\in\mathcal{S}\quad(\text{average shared}),\\[1.2em]
+\lambda_{t(i)}\,\tv_{t(i),i}, & i\in\mathcal{U}\quad(\text{amplify unique}),
+\end{cases}
+\end{equation}
+where $t(i)$ is the unique task touching $i$, and the amplification
+$\lambda_t=1+r\cdot\mathrm{clip}(\rho_t,0,\alpha)$ scales with the task's shared-to-unique
+support ratio $\rho_t=|\mathcal{S}_t|/|\mathcal{U}_t|$. RAM+ is the variant with rescale
+factor $r{=}1.2$. \emph{The partition depends only on $|\tv_{t,i}|>\varepsilon$ --- the
+support --- and is blind to the sign or direction of $\tv_{t,i}$.} This independence is
+central to \S\ref{sec:discussion}.
+
+\subsection{Statistical and geometric methodology}
+\label{sec:prelim-stats}
+Because our effects are small on $168$ tasks, we adopt paired, distribution-free tests
+and calibrate the geometric measurements.
+
+\paragraph{Metrics.} Following AppWorld/LOOP, the headline metric is \emph{task-goal
+completion} (TGC): the fraction of tasks whose unit tests \emph{all} pass (equivalently
+the per-task success rate). \emph{Scenario-goal completion} (SGC) is the fraction of
+scenarios in which \emph{every} task variant succeeds. Both are strict, binary,
+per-task/per-scenario outcomes.
+
+\paragraph{Paired significance (McNemar).} Two models are evaluated on the identical task
+set, giving paired binary outcomes. For a pair, let $b$ be the number of tasks the first
+solves and the second does not, and $c$ the reverse. Under $H_0$ (equal accuracy), the
+discordant pairs satisfy $b\sim\mathrm{Binomial}(b+c,\tfrac12)$, and we report the
+two-sided exact McNemar $p$-value \citep{mcnemar1947}. For contrasts against the base
+model (for which we have only the official aggregate, not per-task outcomes) we fall back
+to an unpaired two-sided Fisher exact test and flag it as such.
+
+\paragraph{Bootstrap CIs.} We report $95\%$ confidence intervals for TGC and for paired
+$\Delta$TGC by resampling tasks with replacement ($20{,}000$ resamples, fixed seed); a
+$\Delta$TGC interval that includes $0$ indicates the contrast is within noise.
+
+\paragraph{Task-vector geometry.} We summarise the relationship between two specialists'
+task vectors by (i) the global cosine
+$\cos(\tv_1,\tv_2)=\langle\tv_1,\tv_2\rangle/(\|\tv_1\|\,\|\tv_2\|)$ over all merged
+coordinates, (ii) the \emph{sign agreement} on the shared support
+$\{i:|\tv_{1,i}|,|\tv_{2,i}|>\varepsilon\}$, and (iii) the \emph{support overlap}
+$|\{i:|\tv_{1,i}|,|\tv_{2,i}|>\varepsilon\}|$ relative to each support. In LoRA space we
+compute these per module from the factors via the identity
+\begin{equation}
+\langle B_1A_1,\,B_2A_2\rangle_F=\big\langle B_1^{\!\top}B_2,\;A_1A_2^{\!\top}\big\rangle_F,
+\label{eq:fro}
+\end{equation}
+which reduces all inner products to $r\times r$ contractions.
+
+\paragraph{Floor/ceiling calibration.} A skeptic may object that low-rank adapters with
+different random initialisations are near-orthogonal \emph{by construction}, so a small
+cosine measures LoRA rather than learning. We bracket the measurement's dynamic range.
+The \emph{floor} (null) draws two independent random rank-$r$ adapters matched to the
+trained shapes and computes their cosine; we also report a \emph{spectrum-matched} null
+that carries each trained task vector's singular-value profile
+($\sigma=\sqrt{\mathrm{eig}((AA^{\!\top})(B^{\!\top}B))}$) along random orthonormal
+directions. The \emph{ceiling} (positive control) computes the cosine between the
+\emph{same} run's task vector at two training checkpoints, showing the metric can register
+high alignment. A measured value well above the floor and well below the ceiling is real
+signal, not a parameterisation artifact.
+
+\section{Experimental setup}
+\label{sec:setup}
+
+\subsection{Benchmark and metrics}
+\label{sec:setup-bench}
+AppWorld \citep{trivedi2024appworld} is an execution-based benchmark of interactive
+digital tasks spanning multiple simulated apps; each task is graded by hidden unit tests.
+We evaluate on the held-out \texttt{test\_normal} split of $168$ tasks, composed of
+$57$ difficulty-1, $48$ difficulty-2, and $63$ difficulty-3 tasks. Difficulty-3 tasks are
+essentially unsolved by all models here ($\le1.6\%$ TGC) and dilute the aggregate; the
+per-difficulty view on d1/d2 is the informative one. Individual tasks are inherently
+multi-app, so specialisation is by \emph{difficulty}, not by app. The reward for RL is the
+task outcome; TGC/SGC are as defined in \S\ref{sec:prelim-stats}.
+
+\subsection{Models and training}
+\label{sec:setup-train}
+All models start from Qwen3-8B and are trained with LOOP (\S\ref{sec:prelim-rl}) using
+LoRA rank $r{=}16$ adapters on the attention and MLP projection matrices
+($\{q,k,v,o,\text{gate},\text{up},\text{down}\}\_\text{proj}$; $252$ adapted modules).
+Key hyperparameters follow \citet{loop2025}: $K{=}6$ rollouts per task, sampling
+temperature $1.0$, learning rate $5\times10^{-5}$, one update epoch per batch
+($N_{\text{epoch}}{=}1$), advantage filter $\delta{=}0.01$, and a per-episode interaction
+budget of $40$. We train three models under an identical recipe:
+\begin{itemize}
+\item \textbf{Difficulty-1 specialist} --- trained only on difficulty-1 tasks.
+\item \textbf{Difficulty-2 specialist} --- trained only on difficulty-2 tasks.
+\item \textbf{Joint} --- trained on the union of difficulty-1 and difficulty-2 tasks.
+\end{itemize}
+Each is run for $\sim\!10$ RL iterations; peak checkpoints are selected on a held-out
+criterion (specialists: iteration $5$; joint: iteration $9$). Training uses $2\times16$\,GB
+GPUs with a balanced device map and gradient checkpointing.
+\TODO{confirm LoRA $\alpha$, trim-$k$ for TIES, and RAM $\varepsilon$ against configs.}
+
+\subsection{Merging}
+\label{sec:setup-merge}
+We merge the two specialists' peak checkpoints with (i) TIES \citep{yadav2023ties} and
+(ii) RAM+ (\citealp{ram2026}; \texttt{arm-r-v2}, rescale $r{=}1.2$), both applied to the
+full merged task vectors. Merging is performed in a separate environment
+(\texttt{transformers} 4.51--4.57 for Qwen3 compatibility).
+
+\subsection{Evaluation protocol (reproducibility)}
+\label{sec:setup-eval}
+Evaluation is deterministic by construction: \emph{greedy} decoding (temperature $0$),
+fixed random seed $100$, and a fixed AppWorld seed, served by vLLM (tensor-parallel $2$,
+context length $32{,}768$). Each task is evaluated in an isolated AppWorld instance; TGC,
+SGC, and per-difficulty breakdowns are computed post hoc from per-task outcome logs. Code
+for training, merging, evaluation, all statistics
+(\texttt{build\_stats.py}), and the geometry calibration
+(\texttt{floor\_ceiling.py}) is released. The only non-determinism we do not eliminate is
+vLLM's scheduling/floating-point reduction order; a single confirmatory re-run would
+bound it. \TODO{report determinism re-run if performed.}
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Performance: merges, specialists, and joint RL all tie}
+\label{sec:results-perf}
+Table~\ref{tab:main} reports per-difficulty and aggregate TGC (with $95\%$ bootstrap CIs)
+and SGC. RL lifts aggregate TGC from the $6.6\%$ base to a $12$--$16\%$ band, but within
+that band the six models overlap heavily. Table~\ref{tab:sig} shows no paired contrast
+among the RL models is significant (McNemar $p\ge0.56$), while every RL model beats the
+base (unpaired Fisher $p\le0.05$). Figure~\ref{fig:forest} makes the picture visual: every
+merge/joint $\Delta$TGC CI crosses $0$; only RL-over-base clears it.
+
+Two consequences follow. First, \emph{behaviour-aware merging is not distinguishable from
+naive merging here}: RAM+ vs.\ TIES is a net one-task difference ($p{=}0.83$). Second, and
+more useful, \emph{merging is indistinguishable from joint multi-task RL}
+(joint vs.\ RAM+ $p{=}1.00$; joint vs.\ TIES $p{=}0.66$) --- the comparison the
+cross-domain RL-merging setting cannot make, since it lacks joint-training data. Merging
+recovers what joint RL achieves on the same data, to within the resolution of this
+benchmark.
+
+\begin{table}[t]
+\centering
+\caption{Held-out \texttt{test\_normal} TGC (\%) by difficulty, aggregate TGC with $95\%$
+bootstrap CI, and SGC (\%). Base is the official external report (no per-task file). All
+RL variants fall in one overlapping band.}
+\label{tab:main}
+\small
+\begin{tabular}{lccccc}
+\toprule
+Model & d1 & d2 & d3 & Agg.\ TGC [95\% CI] & SGC \\
+\midrule
+Base                 & 15.8 & 2.1  & 1.6 & 6.6\ \ (external) & 0.0 \\
+Difficulty-1 spec.\  & 31.6 & 4.2  & 1.6 & 12.5\ \ [7.7,\,17.9] & 5.4 \\
+Difficulty-2 spec.\  & 29.8 & 10.4 & 1.6 & 13.7\ \ [8.9,\,19.0] & 3.6 \\
+Joint                & 36.8 & 10.4 & 1.6 & 16.1\ \ [10.7,\,21.4] & 3.6 \\
+TIES merge           & 35.1 & 8.3  & 0.0 & 14.3\ \ [9.5,\,19.6] & 5.4 \\
+RAM+ merge           & 36.8 & 10.4 & 0.0 & 15.5\ \ [10.1,\,20.8] & 7.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{Pairwise significance on TGC. \emph{Top:} paired McNemar (exact) among RL
+models; the two counts are \emph{discordant} tasks (A-solves-not-B / B-solves-not-A).
+\emph{Bottom:} base has no per-task file (external report), so these are unpaired Fisher
+exact tests and the two counts are \emph{marginal} successes (A / base, out of $168$) ---
+not discordant pairs. No RL--RL contrast is significant; every RL model beats base.}
+\label{tab:sig}
+\small
+\begin{tabular}{llccc}
+\toprule
+Contrast (A vs.\ B) & test & count A & count B & $p$ \\
+\midrule
+Joint vs.\ RAM+            & McNemar & 14 & 13 & 1.000 \\
+RAM+ vs.\ TIES             & McNemar & 12 & 10 & 0.832 \\
+Joint vs.\ TIES            & McNemar & 12 & \ 9 & 0.664 \\
+Difficulty-1 vs.\ Diff-2   & McNemar & 11 & 13 & 0.839 \\
+Joint vs.\ Difficulty-2    & McNemar & 15 & 11 & 0.557 \\
+\midrule
+RAM+ vs.\ Base             & Fisher  & 26 & 11 & 0.014 \\
+Joint vs.\ Base            & Fisher  & 27 & 11 & 0.009 \\
+Difficulty-2 vs.\ Base     & Fisher  & 23 & 11 & 0.045 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\linewidth]{fig3_forest.pdf}
+\caption{Paired $\Delta$TGC with $95\%$ bootstrap CIs. Every merge/joint contrast crosses
+$0$ (indistinguishable); only RL-over-base excludes $0$. The interesting comparisons live
+below the noise wall of this benchmark.}
+\label{fig:forest}
+\end{figure}
+
+\subsection{Task-vector geometry and its development}
+\label{sec:results-geom}
+Why is there so little for behaviour-aware merging to gain? We examine the specialists'
+task vectors. Although their supports overlap by $\sim\!65\%$ (a consequence of adapting
+identical LoRA target matrices, \S\ref{sec:prelim-lora}), their \emph{directions} are
+nearly independent: the global cosine is $0.06$--$0.10$, and sign agreement on the shared
+support is $51.9\%$ --- chance. Figure~\ref{fig:module} shows this holds in every module
+type (maximum $0.12$ in $o\_\text{proj}$). Support overlap and directional alignment are
+thus effectively decoupled.
+
+This small shared component is not present from the start but \emph{develops}:
+Figure~\ref{fig:traj} tracks $\cos(\tv_{d1},\tv_{d2})$ across training. It rises
+monotonically from $0.002$ (iteration $1$) to $0.103$ (iteration $9$) and saturates near
+$0.10$ ($\approx84^\circ$, still dominantly orthogonal), while $\|\tv\|$ grows roughly
+fourfold and sign agreement stays flat at chance. The shape mirrors the known growth of
+inter-task \emph{gradient} alignment in multi-task learning, here shown in weight space
+for RL specialists; we do not claim the phenomenon is novel, but its measurement fixes the
+regime in which support-based merging operates.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.62\linewidth]{fig1_trajectory.pdf}
+\caption{Task-vector geometry develops over RL training. $\cos(\tv_{d1},\tv_{d2})$ (red)
+rises from $\approx0$ to $\approx0.10$ and saturates; $\|\tv\|$ (grey, right axis) grows
+$\sim\!4\times$; sign agreement stays at chance throughout.}
+\label{fig:traj}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.62\linewidth]{fig2_module_cosine.pdf}
+\caption{Per-module cosine between the two specialists' task vectors. Near-orthogonality
+is uniform across module types (global $0.061$; maximum $0.12$).}
+\label{fig:module}
+\end{figure}
+
+\subsection{The measurement is real, not a low-rank artifact}
+\label{sec:results-calib}
+To rule out that $0.06$--$0.10$ is imposed by the rank-$16$ parameterisation, we calibrate
+against a floor and a ceiling (Figure~\ref{fig:calib}). Two independent random rank-$16$
+adapters, matched to the trained shapes, give $|\cos|<10^{-4}$; matching the trained
+singular-value spectrum does not change this (std $\approx2\times10^{-5}$), because in this
+ambient dimension random directions concentrate near-orthogonally regardless of spectrum.
+The same run's task vector at two checkpoints, by contrast, reaches $\cos\approx0.78$--$0.81$,
+so the metric is far from floor-pinned. The cross-specialist value therefore sits
+two-to-three orders of magnitude above the floor and $\sim\!8\times$ below the ceiling: the
+specialists are genuinely, but not trivially, near-orthogonal. The developing trajectory
+of \S\ref{sec:results-geom} corroborates this --- a construction artifact would sit at the
+floor for all iterations rather than climbing with training. \emph{We deliberately avoid
+reporting standard-score (``$\sigma$'') distances from the null: because the null variance
+is so small, such scores are inflated and uninformative; absolute magnitudes and the
+floor/ceiling brackets are the honest summary.}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.72\linewidth]{fig4_calibration.pdf}
+\caption{Floor/ceiling calibration. Random and spectrum-matched rank-$16$ nulls give
+$|\cos|<10^{-4}$ (floor); same-run self-alignment reaches $\approx0.80$ (ceiling); the
+cross-specialist measurement ($0.068\to0.103$) lies well between. Near-orthogonality
+reflects learning, not the low-rank parameterisation.}
+\label{fig:calib}
+\end{figure}
+
+\subsection{A finer metric, and the over-readings it invites}
+\label{sec:results-metric}
+The TGC null (\S\ref{sec:results-perf}) is partly a resolution limit: binary all-or-nothing
+outcomes on $168$ tasks, tested with McNemar (which uses only the $\sim\!20$--$27$
+discordant pairs), have little power. AppWorld also exposes a continuous per-task score
+(fraction of unit tests passed); a paired test on all $168$ continuous differences is far
+more sensitive. We report it not because it overturns the null, but because it is
+instructive about \emph{how} such a finding can mislead --- and we walk through three
+over-readings we ourselves entertained and discarded.
+
+Table~\ref{tab:metric} shows the continuous score does resolve differences TGC cannot:
+joint and both specialists significantly outscore the merges (Wilcoxon $p\le0.016$),
+while behaviour-aware still ties naive (RAM+ vs.\ TIES $p{=}0.57$) and joint ties its
+diff-2 component ($p{=}0.71$). Taken alone this reads as ``merging costs partial
+progress.'' Three checks show why that reading is unsafe.
+
+\emph{(1) It reverses across metrics.} On TGC the merges \emph{beat} diff-2 alone
+($14.3,15.5$ vs.\ $13.7$); on the continuous score they fall \emph{below} it
+($0.45$ vs.\ $0.52$). Merging recombines discrete completions but scores lower on diffuse
+partial progress. A direction that flips with the metric cannot support a capability
+claim.
+
+\emph{(2) It is not emergent cross-task capability.} A natural story is that joint
+co-training discovers cross-task capability absent from either specialist. It does not:
+$\mathrm{mean}(\text{joint})=0.539$ is \emph{below} the mean per-task best specialist
+$\mathrm{mean}(\max(\tau_{d1},\tau_{d2}))=0.581$, and joint lies within
+$[\min,\max]$ of the two specialists on $120/168$ tasks. Joint approximates
+best-of-specialists; it does not exceed it. And a \emph{single} specialist (diff-2) also
+beats the merges, so the gap is a property of \emph{merging}, not of joint co-training.
+
+\emph{(3) The merges track the per-task average.} Both merges are closer to the per-task
+\emph{average} of the specialists' scores than to the per-task max
+(Table~\ref{tab:metric}, bottom), i.e.\ merging $\approx$ averaging competence, which is
+mechanically below best-of. This is the same near-orthogonal-averaging picture as
+\S\ref{sec:discussion}, now visible in outputs.
+
+The honest summary: the continuous metric reveals that merging trades a little diffuse
+partial-progress behaviour for equal completions, consistent with averaging
+near-orthogonal task vectors --- a mechanism observation, not evidence that merging fails
+as a joint-training substitute. On the metric the benchmark actually reports (TGC),
+merging matches joint.
+
+\begin{table}[t]
+\centering
+\caption{Continuous-metric analysis. \emph{Top:} per-model TGC (\%) vs.\ mean partial-credit
+score --- note the reversal for diff-2 vs.\ the merges. \emph{Middle:} paired tests for key
+contrasts (McNemar on TGC vs.\ Wilcoxon signed-rank on the continuous score); the
+continuous metric resolves what TGC cannot. \emph{Bottom:} the merges track the per-task
+average of the specialists, not the max (mean absolute deviation, lower = closer);
+joint sits below the per-task max, so there is no emergence.}
+\label{tab:metric}
+\small
+\begin{tabular}{lcc}
+\toprule
+Model & TGC (\%) & mean score \\
+\midrule
+Difficulty-1 spec. & 12.5 & 0.379 \\
+Difficulty-2 spec. & 13.7 & 0.523 \\
+Joint              & 16.1 & 0.539 \\
+TIES merge         & 14.3 & 0.446 \\
+RAM+ merge         & 15.5 & 0.459 \\
+\midrule
+\emph{paired contrast} & McNemar $p$ & Wilcoxon $p$ \\
+ & (TGC) & (score) \\
+Joint vs.\ RAM+       & 1.000 & 0.005 \\
+Joint vs.\ TIES       & 0.664 & 0.001 \\
+RAM+ vs.\ TIES        & 0.832 & 0.567 \\
+Diff-2 vs.\ RAM+      & 0.701 & 0.016 \\
+Diff-2 vs.\ TIES      & 1.000 & 0.005 \\
+Joint vs.\ Diff-2     & 0.557 & 0.707 \\
+\midrule
+\emph{emergence / averaging} & \multicolumn{2}{c}{value} \\
+mean(joint) vs.\ per-task max & \multicolumn{2}{c}{$0.539 < 0.581$ (no emergence)} \\
+TIES $|{\cdot}\!-\!\mathrm{avg}|$ vs.\ $|{\cdot}\!-\!\max|$ & \multicolumn{2}{c}{$0.226 < 0.264$ (tracks avg)} \\
+RAM+ $|{\cdot}\!-\!\mathrm{avg}|$ vs.\ $|{\cdot}\!-\!\max|$ & \multicolumn{2}{c}{$0.208 < 0.241$ (tracks avg)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{Why RAM has little to disentangle here.} RAM partitions coordinates by support
+co-occurrence and \emph{averages} the shared set (\S\ref{sec:prelim-merge}). With
+$\sim\!65\%$ support overlap but near-zero directional alignment, most co-located updates
+are directionally independent, yet RAM labels them ``shared'' and averages them --- halving
+signal that is effectively task-specific. Its unique set is correspondingly
+under-populated relative to the true (directional) geometry, and on these models the
+count-based amplification is mild. The net effect is that RAM behaves close to uniform
+averaging, which is consistent with RAM+, TIES, and the naive/joint outcomes all landing
+in one statistical band (\S\ref{sec:results-perf}). We stress this is an argument about
+\emph{this regime} --- support-aware merging may well help where supports genuinely encode
+shared vs.\ private directions; our point is that support co-occurrence is not a reliable
+proxy for direction, and here the two come apart.
+
+\paragraph{Merging vs.\ joint RL.} The one comparison our within-benchmark design enables
+and the cross-domain setting cannot --- merge vs.\ joint on the same data --- comes out a
+tie. For practitioners who \emph{can} pool data, merging buys nothing over joint RL at this
+scale; for those who cannot, merging at least does not obviously sacrifice what joint RL
+would have delivered.
+
+\paragraph{Peak-checkpoint selection.} Per arm we merged and evaluated the checkpoint of
+maximum mean \emph{training} reward (diff-1 iter5, diff-2 iter5, joint iter9), \emph{not}
+a checkpoint chosen on \texttt{test\_normal}; RL was unstable past the peak (reward
+collapsed after iter5, $0.569\!\to\!0.387$ and $0.464\!\to\!0.40$), so later checkpoints
+were not used. This is mild optimistic selection on in-distribution reward, not test
+leakage --- the reported test numbers are held out from selection.
+
+\paragraph{Limitations.} (i) Single seed per model: our claims are indistinguishability at
+the resolution of $168$ tasks, not proven equivalence. This matters most for the
+continuous-metric result of \S\ref{sec:results-metric}: before that signal could support
+any capability claim it would need to clear joint-vs-joint seed variance (a conservative
+free proxy is joint's neighbouring checkpoints evaluated on the continuous metric). We
+therefore report it as metric-sensitivity, not capability. (ii) Scale: $8$B parameters,
+$\sim\!10$ RL iterations; larger effects may emerge with more training or larger models.
+(iii) One specialist pair on one benchmark: the geometry is a single, if clean and
+calibrated, observation; whether near-orthogonality persists across other splits or
+app-level specialisations is open. (iv) The partial-credit metric is softer than TGC and
+we lean on it only for the negative/mechanistic points of \S\ref{sec:results-metric}.
+
+\section{Future work: merge-aware checkpoint early stopping}
+\label{sec:future}
+Every merging method takes task vectors as fixed input: one point per task, harvested
+from a final checkpoint. But an RL run produces a \emph{trajectory} $\tv_t(s)$, and which
+point one hands to the merge operator is a free parameter. Two quantities grow together
+over training (\S\ref{sec:results-geom}): capability $\|\tv_t(s)\|$ (reward rises to a
+peak) and interference $\cos(\tv_{d1}(s_1),\tv_{d2}(s_2))$. Merge quality is plausibly a
+difference of the two, so one might stop each specialist early --- trading a little
+capability for lower interference --- via an objective
+\begin{equation}
+J(s_1,s_2)=\underbrace{P_1(s_1)+P_2(s_2)}_{\text{capability (training reward)}}
+-\;\gamma\underbrace{\,I(s_1,s_2)}_{\text{interference}},
+\label{eq:jobj}
+\end{equation}
+with $P_t$ the mean training reward already logged and $I$ computed from the LoRA factors
+(no evaluation needed). Selection need not be diagonal ($s_1\neq s_2$ is allowed), and in
+a decentralised setting each worker could stop on its own signal without synchronisation.
+
+\emph{In our regime this cannot help, and the reason is instructive.}
+Figure~\ref{fig:jgrid} shows the full interference grid $I(s_1,s_2)$: interference is low
+\emph{only} in the undertrained corner and rises with both indices toward the
+capability peak $(5,5)$. Consequently the argmax of Eq.~\ref{eq:jobj} is $(5,5)$ --- the
+reward-peak pair we already merged --- for all $\gamma$ below $\sim\!4$; at $\gamma=0$
+(pure capability) it is $(5,5)$ by definition, and no grid cell exceeds that capability.
+Any $\gamma$ large enough to move the selection lands on $(5,1)$, which merely
+\emph{discards} diff-2's training (its low interference is the triviality of a tiny,
+undeveloped task vector). There is no high-capability, low-interference cell to select,
+because in this regime interference and capability are both driven by $\|\tv\|$ growth and
+rise together. The merge already evaluated is the objective's optimum.
+
+We conjecture the lever has leverage only where interference can be reduced
+\emph{without} sacrificing capability --- larger $T$ (interference accumulates across more
+specialists), cross-domain merging (larger, more-aligned task vectors), or full
+fine-tuning rather than tiny LoRA deltas. Characterising that regime, and validating
+$J$ against measured merge quality with a metric sensitive enough to resolve it
+(\S\ref{sec:results-metric}), is the natural next step.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.56\linewidth]{fig5_jgrid.pdf}
+\caption{Interference grid $I(s_1,s_2)=\cos(\tv_{d1}(s_1),\tv_{d2}(s_2))$ over training
+checkpoints. Low interference coincides with an undertrained specialist (dark corners);
+it rises toward the capability peak $(5,5)$, the merge actually evaluated and the argmax of
+Eq.~\ref{eq:jobj} for any reasonable $\gamma$. The objective's only low-interference
+alternative, $(5,1)$, discards a specialist's training. Merge-aware early stopping has
+nothing to select here.}
+\label{fig:jgrid}
+\end{figure}
+
+\section{Conclusion}
+\label{sec:conclusion}
+On a controlled within-benchmark AppWorld setup, merging RL specialists is statistically
+indistinguishable from joint multi-task RL on the benchmark's primary metric (TGC), and
+behaviour-aware merging is indistinguishable from naive merging --- all within a noise wall
+that $1$--$2$ task margins cannot cross. A calibrated geometric diagnostic explains the
+null: within-benchmark RL specialists remain near-orthogonal in direction (a small,
+developing shared component) despite large support overlap, so support- and sign-based
+merging have little private structure to protect. A finer continuous metric resolves a
+merged-vs-unmerged difference, but we show it reverses across metrics, is not emergent
+cross-task capability, and cannot be closed by trajectory-aware checkpoint selection ---
+a set of disciplined negative results we treat as part of the contribution. We release
+code and statistics to make the null, its calibration, and these checks fully
+reproducible.
+
+% ------------------------------------------------------------------
+\begin{thebibliography}{99}
+\small
+\bibitem[Ahmadian et al.(2024)]{ahmadian2024rloo}
+A.~Ahmadian et al. Back to Basics: Revisiting REINFORCE-style optimization for learning
+from human feedback in LLMs. \emph{ACL}, 2024. arXiv:2402.14740.
+
+\bibitem[Hu et al.(2022)]{hu2022lora}
+E.~Hu et al. LoRA: Low-Rank Adaptation of Large Language Models. \emph{ICLR}, 2022.
+arXiv:2106.09685.
+
+\bibitem[Ilharco et al.(2023)]{ilharco2023taskarithmetic}
+G.~Ilharco et al. Editing Models with Task Arithmetic. \emph{ICLR}, 2023. arXiv:2212.04089.
+
+\bibitem[Kool et al.(2019)]{kool2019rloo}
+W.~Kool, H.~van Hoof, M.~Welling. Buy 4 REINFORCE Samples, Get a Baseline for Free!
+\emph{ICLR DeepRLStructPred Workshop}, 2019.
+
+\bibitem[LOOP(2025)]{loop2025}
+\TODO{Authors}. Reinforcement Learning for Long-Horizon Interactive LLM Agents (LOOP).
+2025. \TODO{arXiv id --- verify}.
+
+\bibitem[Marczak et al.(2025)]{isocts2025}
+D.~Marczak et al. No Task Left Behind: Isotropic Model Merging with Common and
+Task-Specific Subspaces (Iso-CTS). \emph{ICML}, 2025. arXiv:2502.04959.
+
+\bibitem[McNemar(1947)]{mcnemar1947}
+Q.~McNemar. Note on the sampling error of the difference between correlated proportions or
+percentages. \emph{Psychometrika}, 12(2):153--157, 1947.
+
+\bibitem[RAM(2026)]{ram2026}
+\TODO{Authors}. Behavior Knowledge Merge in Reinforced Agentic Models (RAM). 2026.
+arXiv:2601.13572.
+
+\bibitem[Schulman et al.(2017)]{schulman2017ppo}
+J.~Schulman et al. Proximal Policy Optimization Algorithms. 2017. arXiv:1707.06347.
+
+\bibitem[Trivedi et al.(2024)]{trivedi2024appworld}
+H.~Trivedi et al. AppWorld: A Controllable World of Apps and People for Benchmarking
+Interactive Coding Agents. \emph{ACL}, 2024. arXiv:2407.18901.
+
+\bibitem[Yadav et al.(2023)]{yadav2023ties}
+P.~Yadav et al. TIES-Merging: Resolving Interference When Merging Models. \emph{NeurIPS},
+2023. arXiv:2306.01708.
+\end{thebibliography}
+
+\end{document}
