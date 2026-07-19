@@ -2,6 +2,8 @@
 
 Reinforcement learning for interactive LLM agents on the AppWorld benchmark. Implements LOOP (Leave-One-Out Proximal Policy Optimization) from [Reinforcement Learning for Long-Horizon Interactive LLM Agents](https://arxiv.org/pdf/2502.01600).
 
+> **📄 Reproducing the paper?** Step-by-step instructions for the merge-vs-joint RL study (training → merging → evaluation → analysis → figures) are in [`paper/README.md`](paper/README.md).
+
 ## Overview
 
 This repository contains:
