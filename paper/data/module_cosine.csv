@@ -1,0 +1,8 @@
+module,cosine
+o_proj,0.123
+v_proj,0.085
+down_proj,0.077
+gate_proj,0.052
+up_proj,0.051
+q_proj,0.017
+k_proj,0.005

@@ -125,3 +125,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+# Committed small artifacts for laptop-reproducible paper (override data/ and */data/)
+!paper/data/
+!paper/data/**

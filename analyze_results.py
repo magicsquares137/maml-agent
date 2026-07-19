@@ -8,7 +8,17 @@ from collections import defaultdict
 
 AR = os.environ.get("APPWORLD_ROOT", "/home/smcclendon/Documents/github/appworld/appworld-rl")
 
+# committed task_id -> difficulty map (reproduces per-difficulty tables without an
+# AppWorld install); falls back to $APPWORLD_ROOT metadata if the map is absent.
+_DIFFMAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper", "data", "task_difficulty.json")
+try:
+    _DIFFMAP = json.load(open(_DIFFMAP_PATH))
+except Exception:
+    _DIFFMAP = {}
+
 def difficulty(tid):
+    if tid in _DIFFMAP:
+        return _DIFFMAP[tid]
     try:
         return json.load(open(f"{AR}/data/tasks/{tid}/ground_truth/metadata.json")).get("difficulty")
     except Exception:

@@ -1,9 +1,36 @@
 # Reproducing "Merging Reinforced Specialists vs. Joint Multi-Task RL"
 
-This directory holds the analysis/figure code and LaTeX source for the paper. Only
-**code** is version-controlled; the large or regenerable artifacts (LoRA checkpoints,
-merged models, eval result JSONs, derived CSVs, figure PDFs) are **not** committed and
-are reproduced by the steps below.
+This directory holds the analysis/figure code, the small per-task eval logs, and the
+LaTeX source for the paper.
+
+## Quick reproduction — every statistic and figure, no GPU, seconds on a laptop
+
+The five per-task result logs (`results_*.json`, 100 KB) and the derived geometry
+summaries (`paper/data/*.csv`, `paper/calibration.json`, few KB) are committed, so all
+reported numbers and figures regenerate on a laptop with no GPU, no model weights, and no
+AppWorld install:
+
+```bash
+pip install -r ../requirements.txt      # numpy, scipy, matplotlib (+ torch only for Step 5b)
+python build_stats.py                   # Tables 1-2 (per-difficulty TGC/SGC, CIs, McNemar/Fisher)
+python mechanism_stats.py               # Table 3 (metric reversal, Wilcoxon, emergence, averaging)
+python fig_forest.py fig_trajectory.py fig_module_cosine.py fig_calibration.py fig_jgrid.py
+# ^ or: for f in fig_*.py; do python "$f"; done      -> paper/figures/*.pdf
+```
+
+- **Tables 1–3 and Fig 3** are *recomputed from the per-task logs* — the fully
+  from-scratch, editor-verifiable path.
+- **Figs 1, 2, 4, 5** (task-vector geometry) are *replotted from the committed summary
+  files* (`paper/data/*.csv`, `calibration.json`). Re-deriving those summaries from the
+  raw 15 GB LoRA weights is the checkpoint/GPU-gated path in Step 5b below.
+
+Per-difficulty tables use a committed `paper/data/task_difficulty.json`, so no AppWorld
+install is needed; scripts fall back to `$APPWORLD_ROOT` metadata if it is absent.
+
+## Full reproduction from scratch
+
+The steps below regenerate everything from raw training. The large or regenerable
+artifacts (LoRA checkpoints, merged models) are **not** committed.
 
 ## Reproduction chain (overview)
 
@@ -97,17 +124,22 @@ CUDA_VISIBLE_DEVICES=3,4 \
 Writes `results_<model>.json` (per-task `success` + partial-credit `score`) to the repo
 root — the inputs to all tables and the performance figure.
 
-## Step 5 — Analysis (CPU only)
+## Step 5a — Performance analysis (CPU only, from `results_*.json`)
 
 ```bash
 # performance tables + bootstrap CIs + McNemar/Fisher  -> paper/stats.json
 python paper/build_stats.py
 # continuous-metric + mechanism analysis               -> paper/mechanism.json
 python paper/mechanism_stats.py
-# per-difficulty TGC/SGC (needs $APPWORLD_ROOT)
-APPWORLD_ROOT=/path/to/appworld python analyze_results.py results_*.json
+# per-difficulty TGC/SGC (uses committed task_difficulty.json; $APPWORLD_ROOT optional)
+python analyze_results.py results_*.json
+```
 
-# geometry (need the LoRA checkpoints from Step 1) -> paper/data/*.csv
+## Step 5b — Geometry analysis (needs the LoRA checkpoints from Step 1)
+
+Regenerates the committed summaries; skip if you only need to replot from them.
+
+```bash
 python cosine_analysis.py       # snapshot cosine    -> paper/data/module_cosine.csv
 python cosine_trajectory.py     # per-iter cosine    -> paper/data/trajectory.csv
 python paper/floor_ceiling.py   # floor/ceiling calib -> paper/calibration.json

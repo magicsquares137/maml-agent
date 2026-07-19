@@ -15,7 +15,6 @@ from scipy import stats
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HERE = os.path.dirname(os.path.abspath(__file__))
-AR = os.environ.get("APPWORLD_ROOT", "/home/smcclendon/Documents/github/appworld/appworld-rl")
 F = {"diff-1": "results_diff_1_iter5.json", "diff-2": "results_diff_2_iter5.json",
      "joint": "results_joint_iter9.json", "TIES": "results_merged_ties.json",
      "RAM+": "results_merged_ram.json"}

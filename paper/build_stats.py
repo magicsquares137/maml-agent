@@ -18,6 +18,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 AR = os.environ.get("APPWORLD_ROOT", "/home/smcclendon/Documents/github/appworld/appworld-rl")
 
+# committed task_id -> difficulty map so per-difficulty tables reproduce on a bare
+# laptop (no AppWorld install); falls back to $APPWORLD_ROOT if the map is absent.
+_DIFFMAP_PATH = os.path.join(HERE, "data", "task_difficulty.json")
+try:
+    _DIFFMAP = json.load(open(_DIFFMAP_PATH))
+except Exception:
+    _DIFFMAP = {}
+
 # model label -> results file (base is external, no file)
 FILES = {
     "diff-1 spec": "results_diff_1_iter5.json",
@@ -33,6 +41,8 @@ SEED = 100  # fixed; Math.random-free reproducibility
 
 
 def difficulty(tid):
+    if tid in _DIFFMAP:
+        return _DIFFMAP[tid]
     try:
         return json.load(open(f"{AR}/data/tasks/{tid}/ground_truth/metadata.json")).get("difficulty")
     except Exception:
